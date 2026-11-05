@@ -1,0 +1,98 @@
+{
+  "bias" : {
+    "bounce_cap_hits" : 0,
+    "mean_bounces" : 0.26859049479166669
+  },
+  "camera" : "front",
+  "config" : {
+    "max_bounces" : 0,
+    "renderer" : "pt",
+    "rr_start_bounce" : 16,
+    "seed" : 3,
+    "spp" : 64
+  },
+  "config_path" : "configs\/pt_bench.json",
+  "cpu_prep_ms" : {
+    "median" : 0.077374999999999999,
+    "p5" : 0.036374999999999998,
+    "p95" : 0.13125000000000001,
+    "runs" : [
+      {
+        "median" : 0.077625,
+        "p5" : 0.036374999999999998,
+        "p95" : 0.13125000000000001
+      },
+      {
+        "median" : 0.074665999999999996,
+        "p5" : 0.033458000000000002,
+        "p95" : 0.12987499999999999
+      },
+      {
+        "median" : 0.077374999999999999,
+        "p5" : 0.037040999999999998,
+        "p95" : 0.13262499999999999
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 28.2232083263807,
+    "compile" : 1.2115000000000009,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 4.4138333760201931,
+    "p5" : 4.3351249769330025,
+    "p95" : 4.5229166862554848,
+    "runs" : [
+      {
+        "median" : 4.414416616782546,
+        "p5" : 4.3430416844785213,
+        "p95" : 4.5236250152811408
+      },
+      {
+        "median" : 4.4138333760201931,
+        "p5" : 4.3351249769330025,
+        "p95" : 4.5229166862554848
+      },
+      {
+        "median" : 4.4123749830760062,
+        "p5" : 4.3294166680425406,
+        "p95" : 4.5158750144764781
+      }
+    ]
+  },
+  "gpu_ms_per_spp" : 4.4138333760201931,
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 37748736,
+    "device_delta" : 8355840,
+    "renderer" : 8356880
+  },
+  "metrics" : {
+    "psnr" : 39.894828003142855,
+    "relMSE" : 0.0038494526016591714,
+    "ssim" : 0.97579348857556114
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 5.9954235900000003e-05,
+  "reference_id" : "results\/refs\/cumulus_heldout_front\/ref.json",
+  "reference_spp_per_half" : 2048,
+  "renderer" : "pt",
+  "renderer_version" : "ad6fd7e-dirty",
+  "scene" : "cumulus_heldout",
+  "scene_version" : 3,
+  "seed" : 3,
+  "spp_or_quality" : {
+    "spp" : 64
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

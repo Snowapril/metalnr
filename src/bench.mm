@@ -220,12 +220,21 @@ NSDictionary* benchRecordDictionary(const BenchResult& r) {
         d[@"seed"] = @(r.config.seed);
         d[@"gpu_ms_per_spp"] = jsonNumber(r.gpu_ms_per_spp);
     } else {
-        NSMutableDictionary* q = [@{@"primary_steps" : @(r.config.primary_steps),
-                                    @"shadow_steps" : @(r.config.shadow_steps)} mutableCopy];
-        if (r.config.renderer == "analytic") {
-            q[@"ambient_steps"] = @(r.config.ambient_steps);
-            q[@"octaves"] = @(r.config.octaves);
-            q[@"ambient"] = @(r.config.ambient);
+        const RenderConfig& c = r.config;
+        NSMutableDictionary* q = [@{@"step_scale" : @(c.step_scale), @"max_steps" : @(c.max_steps),
+                                    @"min_transmittance" : @(c.min_transmittance), @"dither" : @(c.dither),
+                                    @"empty_skip" : @(c.empty_skip)} mutableCopy];
+        if (c.renderer == "analytic") {
+            q[@"shadow_steps"] = @(c.shadow_steps);
+            q[@"shadow_distance"] = @(c.shadow_distance);
+            q[@"ambient_steps"] = @(c.ambient_steps);
+            q[@"octaves"] = @(c.octaves);
+            q[@"ms_a"] = @(c.ms_a);
+            q[@"ms_b"] = @(c.ms_b);
+            q[@"ms_c"] = @(c.ms_c);
+            q[@"ambient"] = @(c.ambient);
+        } else if (c.renderer == "neural") {
+            q[@"inference"] = ns(c.inference);
         }
         d[@"spp_or_quality"] = q;
         d[@"seed"] = [NSNull null];
@@ -251,10 +260,15 @@ NSDictionary* benchRecordDictionary(const BenchResult& r) {
     if (pt) {
         d[@"bias"] = @{@"bounce_cap_hits" : jsonNumber(statValue(r.stats, "bounce_cap_hits")),
                        @"mean_bounces" : jsonNumber(statValue(r.stats, "mean_bounces"))};
+    } else if (r.config.renderer == "neural") {
+        d[@"bias"] = @{@"notes" : r.config.inference == "scalar"
+                                      ? @"march discretization; network approximation of in-scattering; Monte Carlo "
+                                        @"noise in training targets"
+                                      : @"march discretization; network approximation of in-scattering; Monte Carlo "
+                                        @"noise in training targets; fp16 activations and weights in matmul2d"};
     } else {
-        d[@"bias"] = @{@"notes" : r.config.renderer == "neural"
-                                      ? @"march discretization; neural target noise (log-space bias); fp16 weights"
-                                      : @"march discretization; octave multiple-scattering approximation"};
+        d[@"bias"] = @{@"notes" : @"march discretization; octave multiple-scattering approximation; two-direction "
+                                  @"ambient term"};
     }
     d[@"validation_enabled"] = @(r.validation_enabled);
     return d;

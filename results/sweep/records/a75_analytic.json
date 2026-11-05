@@ -1,0 +1,128 @@
+{
+  "bias" : {
+    "notes" : "march discretization; octave multiple-scattering approximation; two-direction ambient term"
+  },
+  "camera" : "front",
+  "config" : {
+    "ambient" : true,
+    "ambient_steps" : 4,
+    "dither" : true,
+    "empty_skip" : true,
+    "max_steps" : 512,
+    "min_transmittance" : 0.01,
+    "ms_a" : 0.40000000000000002,
+    "ms_b" : 0.34999999999999998,
+    "ms_c" : 0.10000000000000001,
+    "octaves" : 3,
+    "renderer" : "analytic",
+    "shadow_distance" : 0,
+    "shadow_steps" : 6,
+    "step_scale" : 1
+  },
+  "config_path" : "configs\/analytic.json",
+  "cpu_prep_ms" : {
+    "median" : 0.067541000000000004,
+    "p5" : 0.027417,
+    "p95" : 0.127416,
+    "runs" : [
+      {
+        "median" : 0.069958000000000006,
+        "p5" : 0.029083999999999999,
+        "p95" : 0.214
+      },
+      {
+        "median" : 0.067541000000000004,
+        "p5" : 0.026415999999999999,
+        "p95" : 0.127416
+      },
+      {
+        "median" : 0.047667000000000001,
+        "p5" : 0.027417,
+        "p95" : 0.1055
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 27.510624960996211,
+    "compile" : 0.53495900000000063,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 3.7779166596010327,
+    "p5" : 3.3330000005662441,
+    "p95" : 5.0418750033713877,
+    "runs" : [
+      {
+        "median" : 3.7456667050719261,
+        "p5" : 3.3330000005662441,
+        "p95" : 5.0744583131745458
+      },
+      {
+        "median" : 3.7779166596010327,
+        "p5" : 3.2794583239592612,
+        "p95" : 5.0418750033713877
+      },
+      {
+        "median" : 3.778124984819442,
+        "p5" : 3.3891250495798886,
+        "p95" : 4.8651249962858856
+      }
+    ]
+  },
+  "gpu_name" : "Apple M1",
+  "height" : 270,
+  "memory_bytes" : {
+    "density" : 37748736,
+    "device_delta" : 2211840,
+    "renderer" : 2212864
+  },
+  "metrics" : {
+    "psnr" : 19.783112904666119,
+    "relMSE" : 0.090180046758069121,
+    "ssim" : 0.89783980459613344
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_id" : "results\/sweep\/refs\/a75\/ref.json",
+  "renderer" : "analytic",
+  "renderer_version" : "ad6fd7e-dirty",
+  "scene" : "cumulus",
+  "scene_version" : 3,
+  "seed" : null,
+  "spp_or_quality" : {
+    "ambient" : true,
+    "ambient_steps" : 4,
+    "dither" : true,
+    "empty_skip" : true,
+    "max_steps" : 512,
+    "min_transmittance" : 0.0099999997764825821,
+    "ms_a" : 0.40000000596046448,
+    "ms_b" : 0.34999999403953552,
+    "ms_c" : 0.10000000149011612,
+    "octaves" : 3,
+    "shadow_distance" : 0,
+    "shadow_steps" : 6,
+    "step_scale" : 1
+  },
+  "sweep" : {
+    "angle_deg" : 75,
+    "elevation_deg" : 20,
+    "mask_pixels" : 28878,
+    "reference_est_relMSE" : 0.00061944279950033692,
+    "reference_spp_per_half" : 4096,
+    "rmse" : 0.62953394869733215,
+    "score" : 0.39153766148709407,
+    "sun_direction" : [
+      -0.90767329931259155,
+      0.34202015399932861,
+      -0.2432103157043457
+    ]
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 480
+}

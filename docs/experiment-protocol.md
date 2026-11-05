@@ -5,47 +5,41 @@ are in [architecture.md](architecture.md).
 
 ## 1. Scenes and splits
 
-Evaluation scenes share these values: AABB [-400,0,-400]–[400,400,400] m, grid 256×128×256, albedo 0.99,
-and $g=0.8$.
+All scenes share: AABB [-500,0,-500]–[500,800,500] m, grid 256×192×256, albedo 0.99, $g=0.8$, film 960×540,
+scene `version` 3.
 
-| Scene file | `sigma_t_max` [m⁻¹] | `density_seed` |
+| Scene file | Cloud | Role |
 |---|---|---|
-| `scenes/eval_thin.json` | 0.01 | 1 |
-| `scenes/eval_medium.json` | 0.04 | 2 |
-| `scenes/eval_thick.json` | 0.10 | 3 |
+| `scenes/cumulus.json` | Hand-designed 11-lobe cumulus (the article's look), $\sigma_{t,max}=0.05$ | Sun sweep (§8); same-cloud track |
+| `scenes/cumulus_heldout.json` | `makeRandomCumulus(2500)`, a validation-range shape never used for training | Generalization track |
 
-Each scene is rendered from two cameras:
+Cameras: `front` and `side` (horizontal views from 2300 m, 90° apart) and `below` (looking up at the base).
 
-- `side`: at [1390.109, 200, −563.558], looking at [0, 200, 0]; the view direction is perpendicular to the horizontal sun direction, so the cloud is side-lit.
-- `backlit`: at [−563.558, 200, −1390.109], on the far side of the cloud from the sun, looking toward it, to show the forward-scattering silver lining.
+Two neural tracks, reported separately:
 
-Scene `version` 2 (all three eval scenes): `side` moved from [0, 200, −1500], where the sun was almost behind the camera
-and the cloud looked front-lit; no results were recorded against version 1.
-
-That gives 6 evaluation configurations, all at 960×540.
-
-Seed ranges for density:
-
-| Split | `density_seed` range | Other randomization |
+| Model | Training data | Valid comparison |
 |---|---|---|
-| Evaluation | 1–999 (reserved) | None; scene files are fixed |
-| Training | 1000–1999 | Sun elevation in [5°, 90°], `sigma_t_max` in [0.005, 0.15] |
-| Validation | 2000–2999 | Same as training |
+| `cumulus_single` (`configs/neural_single*.json`) | `scenes/cumulus.json` itself with random suns (`--fixed-shape`), the article's single-cloud setup | Same-cloud only: the sun sweep. Its results on `cumulus.json` are **not** generalization results. |
+| `cumulus_net` (`configs/neural*.json`) | Random shapes, seeds 1000–1999; validation seeds 2000–2999 | Both scenes; `cumulus.json` is hand-designed (not from the generator) and `cumulus_heldout.json` is a held-out seed |
+
+Shape seed ranges (random-shape mode): evaluation 1–999 (reserved), training 1000–1999, validation and held-out
+2000–2999. Per training shape the sun (elevation −10…90°, any azimuth) and $\sigma_{t,max}$ (log-uniform
+[0.02, 0.1]) are random.
 
 Rules:
 
-- Never train on evaluation seeds. The model loader logs the dataset seed range, and every bench record stores it.
+- The generalist never trains on evaluation or held-out seeds; the model sidecar and every bench record store the seed
+  range, and fixed-shape datasets are flagged in their header and sidecar.
 - Any change to a scene file requires a bump of its `version`. Results from different scene versions are never compared.
-- The scene constants (AABB, $\sigma$ values, camera positions, sun direction) are initial values. Changing them follows the version rule above.
 
 ## 2. Reference generation
 
-For each of the 6 configurations:
+For each scene/camera configuration of the experiment (`experiments/eval.json`: 2 scenes × 2 cameras):
 
 1. Render two independent halves A and B with `pt`, using seeds 1 and 2 and N spp each, starting at N = `reference.initial_spp` of the experiment (1024 in `experiments/eval.json`).
 2. The reference is $R=(A+B)/2$.
 3. The estimated reference error is $\widehat{\mathrm{relMSE}}(R)=\mathrm{relMSE}(A,B)/4$. A−B has twice the per-half variance, and averaging the halves halves it, so the ratio is 1/4.
-4. Accept the reference only if $\widehat{\mathrm{relMSE}}\le10^{-4}$ **and** $\widehat{\mathrm{relMSE}}\le0.1\times$ the smallest relMSE of any compared method on that configuration. Otherwise re-render with N' = the smallest power of two $\ge\max(2N,\ N\,\widehat{\mathrm{relMSE}}/\text{target})$ (the estimate falls as 1/N), capped at `reference.max_spp` (65536; the thin scenes need it because the neural relMSE there is ~1e-5).
+4. Accept the reference only if $\widehat{\mathrm{relMSE}}\le10^{-4}$ **and** $\widehat{\mathrm{relMSE}}\le0.1\times$ the smallest relMSE of any compared method on that configuration. Otherwise re-render with N' = the smallest power of two $\ge\max(2N,\ N\,\widehat{\mathrm{relMSE}}/\text{target})$ (the estimate falls as 1/N), capped at `reference.max_spp` (65536).
 5. Store `ref.pfm`, `refA.pfm`, `refB.pfm`, `ref.png`, `convergence.csv` and `ref.json` (N, seeds, estimated error, `meets_abs_gate`, convergence slope, wall and GPU time, bounce-cap hits, renderer version). `cloudnr suite` keeps references in `results/refs/<scene>_<camera>/` and reuses one only if scene version, camera, resolution, seeds, pt settings and renderer version match.
 
 An unaccepted reference is never used as ground truth: if the cap is reached first, the suite still writes the
@@ -137,6 +131,23 @@ reference seeds) at power-of-two checkpoints; its GPU time is the cumulative GPU
 
 - Compare methods only at their recorded configurations. Label any comparison where quality settings differ.
 - Never use an unaccepted reference (§2).
-- Report bias sources next to the results: bounce-cap hits (`pt`), march discretization and octave model bias (`analytic`, `neural`), and target noise in log space (`neural`).
-- Report neural results with the model version, dataset seed ranges, and validation loss.
+- Report bias sources next to the results: bounce-cap hits (`pt`), march discretization, early termination and the octave model (`analytic`), and Monte Carlo noise in the training targets (`neural`).
+- Report neural results with the model version, dataset seed ranges (or the fixed-shape flag), and validation loss/correlation. Never present `cumulus_single` results on `scenes/cumulus.json` as generalization results.
 - Report excluded costs (§4) in a separate table, never added to steady-state numbers.
+
+## 8. Sun sweep (the article's evaluation)
+
+`cloudnr sweep --experiment experiments/sweep.json` swings the sun around the cloud and scores each method against
+a path-traced reference at every position, as in the article.
+
+- Scene `scenes/cumulus.json`, camera `front`, 480×270 (about 29k cloud pixels; the article used ~10.7k).
+- Sun angle $a\in\{0,15,\dots,180\}°$ at elevation 20°: $\omega_{sun}=\mathrm{normalize}(\cos e\,(-\cos a\,\hat f+\sin a\,\hat r)+\sin e\,\hat y)$
+  with $\hat f,\hat r$ the camera's horizontal forward/right. 0° = sun behind the camera (front-lit), 180° = sun behind
+  the cloud (backlit).
+- Reference per angle: two-half `pt` at 4096 spp per half (`refs/a<angle>/`, estimated error recorded).
+- Mask: pixels where the analytic render's alpha $1-T>0.05$.
+- **Score** $=\sum_{mask}\mathrm{lum}(x)\,/\sum_{mask}\mathrm{lum}(r)$ (Rec.709 luminance, linear): 1 matches, <1 too
+  dark, >1 too bright. **RMSE** of luminance over the mask. Full-image relMSE/PSNR/SSIM and GPU time (§4) as well.
+- Methods: `analytic`, `neural_single` (scalar), `neural_single_shaderml` (Shader ML), `neural` (generalist). The
+  same-cloud specialist is the article's setup; the generalist column shows what is lost without training on the cloud.
+- Outputs: `sweep.csv`, `report.md`, per-angle image strips (reference, then each method), records, experiment copy.

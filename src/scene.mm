@@ -2,10 +2,13 @@
 
 #import <Foundation/Foundation.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <initializer_list>
+#include <limits>
+#include <random>
 #include <set>
 
 namespace {
@@ -125,6 +128,130 @@ NSNumber* jsonFloat(float f) {
 
 NSArray* jsonFloat3(simd_float3 v) { return @[ jsonFloat(v.x), jsonFloat(v.y), jsonFloat(v.z) ]; }
 
+// Oldest scene file version with the cumulus schema (volume.density "cumulus" | "constant").
+constexpr uint32_t kMinSceneVersion = 3;
+
+// Every float of the cloud must be finite; lengths that divide or define widths must be positive.
+void validateCloud(const CloudDesc& c, const std::string& path) {
+    if (c.lobes.empty() || c.lobes.size() > CNR_MAX_LOBES)
+        fail(path + ".lobes must have 1.." + std::to_string(CNR_MAX_LOBES) + " entries");
+    for (size_t i = 0; i < c.lobes.size(); ++i)
+        if (!(c.lobes[i].w > 0)) fail(path + ".lobes[" + std::to_string(i) + "] radius must be > 0");
+    if (!(c.lobe_blend > 0)) fail(path + ".lobe_blend must be > 0");
+    if (!(c.radius > 0)) fail(path + ".radius must be > 0");
+    if (!(c.height > c.anvil_height)) fail(path + ".height must exceed " + path + ".anvil_height");
+    if (!(c.anvil_spread >= 0)) fail(path + ".anvil_spread must be >= 0");
+    if (!(c.base_softness > 0)) fail(path + ".base_softness must be > 0");
+    if (!(c.base_fade_height > 0)) fail(path + ".base_fade_height must be > 0");
+    if (!(c.erosion_feature_size > 0)) fail(path + ".erosion_feature_size must be > 0");
+    if (c.erosion_octaves < 1 || c.erosion_octaves > 8) fail(path + ".erosion_octaves must be in [1, 8]");
+    if (!(c.erosion_amplitude >= 0)) fail(path + ".erosion_amplitude must be >= 0");
+    if (!(c.edge > 0)) fail(path + ".edge must be > 0");
+}
+
+// volume.cloud is either the full CloudDesc or {"generator_seed": N}, which expands to
+// makeRandomCumulus(N, volume) at load time (saved scenes always contain the expanded cloud).
+CloudDesc parseCloud(NSDictionary* d, const VolumeDesc& volume) {
+    const std::string path = "volume.cloud";
+    if (d[@"generator_seed"]) {
+        checkKeys(d, path, {"generator_seed"});
+        uint32_t seed = 0;
+        readUint(d, path, "generator_seed", seed);
+        return makeRandomCumulus(seed, volume);
+    }
+    checkKeys(d, path, {"base_center", "lobes", "lobe_blend", "shear", "anvil_height", "height", "anvil_spread",
+                        "radius", "base_softness", "base_fade_height", "erosion_feature_size", "erosion_octaves",
+                        "erosion_amplitude", "edge", "seed"});
+    CloudDesc c;
+    readFloat3(d, path, "base_center", c.base_center);
+    id lobes = member(d, path, "lobes", true);
+    if (![lobes isKindOfClass:[NSArray class]] || [lobes count] == 0 || [lobes count] > CNR_MAX_LOBES)
+        fail(path + ".lobes must be an array of 1.." + std::to_string(CNR_MAX_LOBES) + " [x, y, z, radius] entries");
+    for (NSUInteger i = 0; i < [lobes count]; ++i) {
+        const std::string lp = path + ".lobes[" + std::to_string(i) + "]";
+        id l = lobes[i];
+        if (![l isKindOfClass:[NSArray class]] || [l count] != 4) fail(lp + " must be an array of 4 numbers");
+        simd_float4 lobe;
+        for (int j = 0; j < 4; ++j) lobe[j] = toFloat(l[j], lp + "[" + std::to_string(j) + "]");
+        c.lobes.push_back(lobe);
+    }
+    readFloat(d, path, "lobe_blend", c.lobe_blend);
+    id shear = member(d, path, "shear", true);
+    if (![shear isKindOfClass:[NSArray class]] || [shear count] != 2) fail(path + ".shear must be an array of 2 numbers");
+    for (int j = 0; j < 2; ++j) c.shear[j] = toFloat(shear[j], path + ".shear[" + std::to_string(j) + "]");
+    readFloat(d, path, "anvil_height", c.anvil_height);
+    readFloat(d, path, "height", c.height);
+    readFloat(d, path, "anvil_spread", c.anvil_spread);
+    readFloat(d, path, "radius", c.radius);
+    readFloat(d, path, "base_softness", c.base_softness);
+    readFloat(d, path, "base_fade_height", c.base_fade_height);
+    readFloat(d, path, "erosion_feature_size", c.erosion_feature_size);
+    readUint(d, path, "erosion_octaves", c.erosion_octaves);
+    readFloat(d, path, "erosion_amplitude", c.erosion_amplitude);
+    readFloat(d, path, "edge", c.edge);
+    readUint(d, path, "seed", c.seed);
+    validateCloud(c, path);
+    return c;
+}
+
+NSDictionary* cloudToJSON(const CloudDesc& c) {
+    NSMutableArray* lobes = [NSMutableArray array];
+    for (simd_float4 l : c.lobes) [lobes addObject:@[ jsonFloat(l.x), jsonFloat(l.y), jsonFloat(l.z), jsonFloat(l.w) ]];
+    return @{
+        @"base_center" : jsonFloat3(c.base_center),
+        @"lobes" : lobes,
+        @"lobe_blend" : jsonFloat(c.lobe_blend),
+        @"shear" : @[ jsonFloat(c.shear.x), jsonFloat(c.shear.y) ],
+        @"anvil_height" : jsonFloat(c.anvil_height),
+        @"height" : jsonFloat(c.height),
+        @"anvil_spread" : jsonFloat(c.anvil_spread),
+        @"radius" : jsonFloat(c.radius),
+        @"base_softness" : jsonFloat(c.base_softness),
+        @"base_fade_height" : jsonFloat(c.base_fade_height),
+        @"erosion_feature_size" : jsonFloat(c.erosion_feature_size),
+        @"erosion_octaves" : @(c.erosion_octaves),
+        @"erosion_amplitude" : jsonFloat(c.erosion_amplitude),
+        @"edge" : jsonFloat(c.edge),
+        @"seed" : @(c.seed),
+    };
+}
+
+float hostSmoothstep(float e0, float e1, float x) {
+    float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Conservative cloud-local AABB of the region where the baked cumulus density can be > 0
+// (bake_density.metal): smooth_max adds at most lobe_blend / 4 per lobe, erosion at most
+// erosion_amplitude, and the field is <= p.y, so density is 0 for p.y <= 0. The anvil scale
+// s(y) = 1 + anvil_spread / radius * smoothstep(anvil_height, height, y) is monotone in y.
+void cloudLocalBounds(const CloudDesc& c, simd_float3* lo, simd_float3* hi) {
+    const float inflate = float(c.lobes.size() - 1) * c.lobe_blend * 0.25f + c.erosion_amplitude;
+    const float k = c.anvil_spread / c.radius;
+    const float inf = std::numeric_limits<float>::infinity();
+    *lo = simd_make_float3(inf, inf, inf);
+    *hi = -*lo;
+    for (simd_float4 l : c.lobes) {
+        const float R = l.w + inflate;
+        const float ylo = std::max(l.y - R, 0.0f);
+        const float yhi = l.y + R;
+        if (yhi <= 0.0f) continue;
+        const float s0 = 1.0f + k * hostSmoothstep(c.anvil_height, c.height, ylo);
+        const float s1 = 1.0f + k * hostSmoothstep(c.anvil_height, c.height, yhi);
+        lo->y = std::min(lo->y, ylo);
+        hi->y = std::max(hi->y, yhi);
+        const int axes[2] = {0, 2};
+        for (int a = 0; a < 2; ++a) {
+            const int axis = axes[a];
+            const float qlo = l[axis] - R, qhi = l[axis] + R;
+            const float sh = c.shear[a];
+            (*lo)[axis] = std::min((*lo)[axis], std::min(qlo * s0, qlo * s1) + std::min(sh * ylo, sh * yhi));
+            (*hi)[axis] = std::max((*hi)[axis], std::max(qhi * s0, qhi * s1) + std::max(sh * ylo, sh * yhi));
+        }
+    }
+    if (lo->y > hi->y) *lo = *hi = simd_make_float3(0.0f, 0.0f, 0.0f);  // every lobe lies below the base
+}
+
 NSDictionary* readJSONFile(const std::string& path) {
     NSError* err = nil;
     NSData* data = [NSData dataWithContentsOfFile:@(path.c_str()) options:0 error:&err];
@@ -148,6 +275,9 @@ Scene parseScene(NSDictionary* root) {
     Scene s;
     checkKeys(root, "", {"version", "name", "cameras", "film", "volume", "medium", "light"});
     readUint(root, "", "version", s.version);
+    if (s.version < kMinSceneVersion)
+        fail("version " + std::to_string(s.version) + " predates the cumulus scene schema (version >= " +
+             std::to_string(kMinSceneVersion) + " required)");
     readString(root, "", "name", s.name);
 
     id cams = member(root, "", "cameras", true);
@@ -180,24 +310,24 @@ Scene parseScene(NSDictionary* root) {
     if (s.width == 0 || s.height == 0) fail("film.width and film.height must be > 0");
 
     NSDictionary* vol = asDict(member(root, "", "volume", true), "volume");
-    checkKeys(vol, "volume", {"bounds_min", "bounds_max", "grid", "density", "density_seed", "coverage", "erosion",
-                              "constant_density"});
+    checkKeys(vol, "volume", {"bounds_min", "bounds_max", "grid", "density", "cloud", "constant_density"});
     VolumeDesc& v = s.volume;
     readFloat3(vol, "volume", "bounds_min", v.bounds_min);
     readFloat3(vol, "volume", "bounds_max", v.bounds_max);
     v.grid = toUint3(member(vol, "volume", "grid", true), "volume.grid");
-    readString(vol, "volume", "density", v.density, false);
-    readUint(vol, "volume", "density_seed", v.density_seed);
-    readFloat(vol, "volume", "coverage", v.coverage);
-    readFloat(vol, "volume", "erosion", v.erosion);
-    readFloat(vol, "volume", "constant_density", v.constant_density, false);
+    readString(vol, "volume", "density", v.density);
     if (!simd_all(v.bounds_max > v.bounds_min)) fail("volume.bounds_max must exceed volume.bounds_min on every axis");
     if (v.grid.x == 0 || v.grid.y == 0 || v.grid.z == 0) fail("volume.grid must be positive");
-    if (v.density != "procedural" && v.density != "constant")
-        fail("volume.density must be \"procedural\" or \"constant\"");
-    if (!(v.coverage >= 0 && v.coverage <= 1)) fail("volume.coverage must be in [0, 1]");
-    if (!(v.erosion >= 0)) fail("volume.erosion must be >= 0");
-    if (!(v.constant_density >= 0 && v.constant_density <= 1)) fail("volume.constant_density must be in [0, 1]");
+    if (v.density == "cumulus") {
+        if (vol[@"constant_density"]) fail("volume.constant_density is only allowed with volume.density \"constant\"");
+        v.cloud = parseCloud(asDict(member(vol, "volume", "cloud", true), "volume.cloud"), v);
+    } else if (v.density == "constant") {
+        if (vol[@"cloud"]) fail("volume.cloud is only allowed with volume.density \"cumulus\"");
+        readFloat(vol, "volume", "constant_density", v.constant_density, false);
+        if (!(v.constant_density >= 0 && v.constant_density <= 1)) fail("volume.constant_density must be in [0, 1]");
+    } else {
+        fail("volume.density must be \"cumulus\" or \"constant\"");
+    }
 
     NSDictionary* med = asDict(member(root, "", "medium", true), "medium");
     checkKeys(med, "medium", {"sigma_t_max", "albedo", "hg_g"});
@@ -231,21 +361,22 @@ NSDictionary* sceneToJSON(const Scene& s) {
         }];
     }
     const VolumeDesc& v = s.volume;
+    NSMutableDictionary* volume = [@{
+        @"bounds_min" : jsonFloat3(v.bounds_min),
+        @"bounds_max" : jsonFloat3(v.bounds_max),
+        @"grid" : @[ @(v.grid.x), @(v.grid.y), @(v.grid.z) ],
+        @"density" : @(v.density.c_str()),
+    } mutableCopy];
+    if (v.density == "cumulus")
+        volume[@"cloud"] = cloudToJSON(v.cloud);
+    else
+        volume[@"constant_density"] = jsonFloat(v.constant_density);
     return @{
         @"version" : @(s.version),
         @"name" : @(s.name.c_str()),
         @"cameras" : cams,
         @"film" : @{@"width" : @(s.width), @"height" : @(s.height)},
-        @"volume" : @{
-            @"bounds_min" : jsonFloat3(v.bounds_min),
-            @"bounds_max" : jsonFloat3(v.bounds_max),
-            @"grid" : @[ @(v.grid.x), @(v.grid.y), @(v.grid.z) ],
-            @"density" : @(v.density.c_str()),
-            @"density_seed" : @(v.density_seed),
-            @"coverage" : jsonFloat(v.coverage),
-            @"erosion" : jsonFloat(v.erosion),
-            @"constant_density" : jsonFloat(v.constant_density),
-        },
+        @"volume" : volume,
         @"medium" : @{
             @"sigma_t_max" : jsonFloat(s.medium.sigma_t_max),
             @"albedo" : jsonFloat(s.medium.albedo),
@@ -260,23 +391,47 @@ NSDictionary* sceneToJSON(const Scene& s) {
     };
 }
 
+// The shared march keys (density, analytic, neural); all optional with the RenderConfig defaults.
+void readMarch(NSDictionary* root, RenderConfig& c) {
+    readFloat(root, "", "step_scale", c.step_scale, false);
+    readUint(root, "", "max_steps", c.max_steps, false);
+    readFloat(root, "", "min_transmittance", c.min_transmittance, false);
+    readBool(root, "", "dither", c.dither, false);
+    readBool(root, "", "empty_skip", c.empty_skip, false);
+    if (!(c.step_scale > 0)) fail("step_scale must be > 0");
+    if (c.max_steps == 0) fail("max_steps must be > 0");
+    if (!(c.min_transmittance >= 0 && c.min_transmittance < 1)) fail("min_transmittance must be in [0, 1)");
+}
+
+void writeMarch(NSMutableDictionary* d, const RenderConfig& c) {
+    d[@"step_scale"] = jsonFloat(c.step_scale);
+    d[@"max_steps"] = @(c.max_steps);
+    d[@"min_transmittance"] = jsonFloat(c.min_transmittance);
+    d[@"dither"] = c.dither ? @YES : @NO;
+    d[@"empty_skip"] = c.empty_skip ? @YES : @NO;
+}
+
 RenderConfig parseRenderConfig(NSDictionary* root) {
     RenderConfig c;
     readString(root, "", "renderer", c.renderer);
     if (c.renderer == "density") {
-        checkKeys(root, "", {"renderer", "primary_steps"});
-        readUint(root, "", "primary_steps", c.primary_steps, false);
+        checkKeys(root, "", {"renderer", "step_scale", "max_steps", "min_transmittance", "dither", "empty_skip"});
+        readMarch(root, c);
     } else if (c.renderer == "analytic") {
-        checkKeys(root, "", {"renderer", "primary_steps", "shadow_steps", "ambient_steps", "octaves", "ms_a", "ms_b",
-                             "ms_c", "ambient"});
-        readUint(root, "", "primary_steps", c.primary_steps, false);
+        checkKeys(root, "", {"renderer", "step_scale", "max_steps", "min_transmittance", "dither", "empty_skip",
+                             "shadow_steps", "shadow_distance", "ambient_steps", "octaves", "ms_a", "ms_b", "ms_c",
+                             "ambient"});
+        readMarch(root, c);
         readUint(root, "", "shadow_steps", c.shadow_steps, false);
+        readFloat(root, "", "shadow_distance", c.shadow_distance, false);
         readUint(root, "", "ambient_steps", c.ambient_steps, false);
         readUint(root, "", "octaves", c.octaves, false);
         readFloat(root, "", "ms_a", c.ms_a, false);
         readFloat(root, "", "ms_b", c.ms_b, false);
         readFloat(root, "", "ms_c", c.ms_c, false);
         readBool(root, "", "ambient", c.ambient, false);
+        if (c.shadow_steps == 0) fail("shadow_steps must be > 0");
+        if (!(c.shadow_distance >= 0)) fail("shadow_distance must be >= 0");
         if (c.octaves == 0) fail("octaves must be >= 1");
         if (c.ambient && c.ambient_steps == 0) fail("ambient_steps must be > 0 when ambient is true");
     } else if (c.renderer == "pt") {
@@ -287,49 +442,48 @@ RenderConfig parseRenderConfig(NSDictionary* root) {
         readUint(root, "", "rr_start_bounce", c.rr_start_bounce, false);
         if (c.spp == 0) fail("spp must be > 0");
     } else if (c.renderer == "neural") {
-        checkKeys(root, "", {"renderer", "model", "primary_steps", "shadow_steps"});
+        checkKeys(root, "", {"renderer", "model", "inference", "step_scale", "max_steps", "min_transmittance",
+                             "dither", "empty_skip"});
         readString(root, "", "model", c.model);
-        readUint(root, "", "primary_steps", c.primary_steps, false);
-        readUint(root, "", "shadow_steps", c.shadow_steps, false);
+        readString(root, "", "inference", c.inference, false);
+        readMarch(root, c);
         if (c.model.empty()) fail("model must be non-empty");
+        if (c.inference != "scalar" && c.inference != "shader_ml" && c.inference != "ml_encoder")
+            fail("inference must be one of scalar, shader_ml, ml_encoder (got \"" + c.inference + "\")");
     } else {
         fail("renderer must be one of density, analytic, pt, neural (got \"" + c.renderer + "\")");
     }
-    if (c.renderer != "pt" && c.primary_steps == 0) fail("primary_steps must be > 0");
-    if ((c.renderer == "analytic" || c.renderer == "neural") && c.shadow_steps == 0) fail("shadow_steps must be > 0");
     return c;
 }
 
 NSDictionary* renderConfigToJSON(const RenderConfig& c) {
-    if (c.renderer == "density") return @{@"renderer" : @"density", @"primary_steps" : @(c.primary_steps)};
-    if (c.renderer == "analytic")
-        return @{
-            @"renderer" : @"analytic",
-            @"primary_steps" : @(c.primary_steps),
-            @"shadow_steps" : @(c.shadow_steps),
-            @"ambient_steps" : @(c.ambient_steps),
-            @"octaves" : @(c.octaves),
-            @"ms_a" : jsonFloat(c.ms_a),
-            @"ms_b" : jsonFloat(c.ms_b),
-            @"ms_c" : jsonFloat(c.ms_c),
-            @"ambient" : c.ambient ? @YES : @NO,
-        };
-    if (c.renderer == "pt")
-        return @{
-            @"renderer" : @"pt",
-            @"spp" : @(c.spp),
-            @"seed" : @(c.seed),
-            @"max_bounces" : @(c.max_bounces),
-            @"rr_start_bounce" : @(c.rr_start_bounce),
-        };
-    if (c.renderer == "neural")
-        return @{
-            @"renderer" : @"neural",
-            @"model" : @(c.model.c_str()),
-            @"primary_steps" : @(c.primary_steps),
-            @"shadow_steps" : @(c.shadow_steps),
-        };
-    fail("renderer must be one of density, analytic, pt, neural (got \"" + c.renderer + "\")");
+    NSMutableDictionary* d = [NSMutableDictionary dictionary];
+    d[@"renderer"] = @(c.renderer.c_str());
+    if (c.renderer == "density") {
+        writeMarch(d, c);
+    } else if (c.renderer == "analytic") {
+        writeMarch(d, c);
+        d[@"shadow_steps"] = @(c.shadow_steps);
+        d[@"shadow_distance"] = jsonFloat(c.shadow_distance);
+        d[@"ambient_steps"] = @(c.ambient_steps);
+        d[@"octaves"] = @(c.octaves);
+        d[@"ms_a"] = jsonFloat(c.ms_a);
+        d[@"ms_b"] = jsonFloat(c.ms_b);
+        d[@"ms_c"] = jsonFloat(c.ms_c);
+        d[@"ambient"] = c.ambient ? @YES : @NO;
+    } else if (c.renderer == "pt") {
+        d[@"spp"] = @(c.spp);
+        d[@"seed"] = @(c.seed);
+        d[@"max_bounces"] = @(c.max_bounces);
+        d[@"rr_start_bounce"] = @(c.rr_start_bounce);
+    } else if (c.renderer == "neural") {
+        d[@"model"] = @(c.model.c_str());
+        d[@"inference"] = @(c.inference.c_str());
+        writeMarch(d, c);
+    } else {
+        fail("renderer must be one of density, analytic, pt, neural (got \"" + c.renderer + "\")");
+    }
+    return d;
 }
 
 }  // namespace
@@ -426,10 +580,123 @@ DensityBakeParams makeDensityBakeParams(const Scene& scene) {
     p.grid_x = v.grid.x;
     p.grid_y = v.grid.y;
     p.grid_z = v.grid.z;
-    p.density_type = v.density == "constant" ? CNR_DENSITY_CONSTANT : CNR_DENSITY_PROCEDURAL;
-    p.density_seed = v.density_seed;
-    p.coverage = v.coverage;
-    p.erosion = v.erosion;
-    p.constant_density = v.constant_density;
+    if (v.density == "constant") {
+        p.density_type = CNR_DENSITY_CONSTANT;
+        p.constant_density = v.constant_density;
+        return p;
+    }
+    const CloudDesc& c = v.cloud;
+    p.density_type = CNR_DENSITY_CUMULUS;
+    p.base_center = c.base_center;
+    p.seed = c.seed;
+    p.lobe_count = uint32_t(std::min<size_t>(c.lobes.size(), CNR_MAX_LOBES));
+    for (uint32_t i = 0; i < p.lobe_count; ++i) p.lobes[i] = c.lobes[i];
+    p.erosion_octaves = c.erosion_octaves;
+    p.edge = c.edge;
+    p.lobe_blend = c.lobe_blend;
+    p.shear_x = c.shear.x;
+    p.shear_z = c.shear.y;
+    p.anvil_height = c.anvil_height;
+    p.cloud_height = c.height;
+    p.anvil_spread = c.anvil_spread;
+    p.cloud_radius = c.radius;
+    p.base_softness = c.base_softness;
+    p.base_fade_height = c.base_fade_height;
+    p.erosion_feature_size = c.erosion_feature_size;
+    p.erosion_amplitude = c.erosion_amplitude;
     return p;
+}
+
+MarchParams makeMarchParams(const RenderConfig& config) {
+    MarchParams m{};
+    m.step_scale = config.step_scale;
+    m.min_transmittance = config.min_transmittance;
+    m.max_steps = config.max_steps;
+    m.flags = (config.dither ? CNR_MARCH_DITHER : 0u) | (config.empty_skip ? CNR_MARCH_EMPTY_SKIP : 0u);
+    return m;
+}
+
+// Layout: a big core lobe (r 170-220 m) sitting on the flat base, then 3-8 smaller lobes (r 80-220 m,
+// 0.6-0.9 of their parent) each stacked on a random earlier lobe, offset sideways by 0.25-0.6 and upward
+// by 0.15-0.5 of the parent radius. Shear per axis in [-0.3, 0.3], anvil from 55-80 % of the cloud
+// height, erosion amplitude 20-50 m, feature size 35-90 m, edge 8-35 m. Layouts whose conservative
+// bounds (cloudLocalBounds) do not fit the volume with a margin are redrawn from the same stream; after
+// kAttempts the last layout is scaled down uniformly (only for volumes far smaller than ~1 km).
+// base_center places the bounds inside the volume at a random horizontal position and a base height of
+// up to 150 m above the lowest valid position.
+CloudDesc makeRandomCumulus(uint32_t seed, const VolumeDesc& volume) {
+    std::mt19937_64 rng(seed);
+    // Explicit 53-bit mapping instead of std::uniform_real_distribution: identical shapes on every library.
+    auto uniform = [&rng](float a, float b) { return a + (b - a) * float(double(rng() >> 11) * 0x1.0p-53); };
+    auto pick = [&rng](uint32_t n) { return uint32_t(rng() % n); };
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    constexpr int kAttempts = 256;
+
+    const simd_float3 vext = volume.bounds_max - volume.bounds_min;
+    const simd_float3 voxel = vext / simd_float(simd_max(volume.grid, simd_make_uint3(1, 1, 1)));
+    const float margin = std::min(std::max(20.0f, 2.0f * simd_reduce_max(voxel)), 0.05f * simd_reduce_min(vext));
+    const simd_float3 kZero3 = simd_make_float3(0.0f, 0.0f, 0.0f);
+
+    CloudDesc c;
+    simd_float3 lo{}, hi{};
+    bool fits = false;
+    for (int attempt = 0; attempt < kAttempts && !fits; ++attempt) {
+        c = CloudDesc{};
+        c.seed = seed;
+        // One draw per statement: function-argument evaluation order is unspecified.
+        const uint32_t lobeCount = 4 + pick(9);
+        const float r0 = uniform(150.0f, 220.0f);
+        const float coreX = uniform(-20.0f, 20.0f);
+        const float coreY = r0 * uniform(0.3f, 0.5f);
+        const float coreZ = uniform(-20.0f, 20.0f);
+        c.lobes.push_back(simd_make_float4(coreX, coreY, coreZ, r0));
+        for (uint32_t i = 1; i < lobeCount; ++i) {
+            const simd_float4 parent = c.lobes[pick(i)];
+            const float r = std::clamp(parent.w * uniform(0.55f, 0.9f), 70.0f, 220.0f);
+            const float phi = uniform(0.0f, kTwoPi);
+            const float side = parent.w * uniform(0.25f, 0.6f);
+            const float up = parent.w * uniform(0.15f, 0.5f);
+            c.lobes.push_back(simd_make_float4(parent.x + side * std::cos(phi), std::max(parent.y + up, 0.3f * r),
+                                               parent.z + side * std::sin(phi), r));
+        }
+        float top = 0.0f;
+        for (simd_float4 l : c.lobes) top = std::max(top, l.y + l.w);
+        c.lobe_blend = uniform(15.0f, 45.0f);
+        c.shear.x = uniform(-0.3f, 0.3f);
+        c.shear.y = uniform(-0.3f, 0.3f);
+        c.height = top * uniform(0.85f, 1.0f);
+        c.anvil_height = c.height * uniform(0.55f, 0.8f);
+        c.radius = uniform(250.0f, 350.0f);
+        c.anvil_spread = uniform(30.0f, 120.0f);
+        c.base_softness = uniform(8.0f, 20.0f);
+        c.base_fade_height = uniform(40.0f, 90.0f);
+        c.erosion_feature_size = uniform(35.0f, 90.0f);
+        c.erosion_octaves = 4 + pick(2);
+        c.erosion_amplitude = uniform(20.0f, 50.0f);
+        c.edge = uniform(8.0f, 35.0f);
+        cloudLocalBounds(c, &lo, &hi);
+        fits = simd_all(hi - lo + 2.0f * margin <= vext);
+    }
+    if (!fits) {
+        // Every length scales by s and the shear and anvil ratio are scale-free, so the bounds scale by s.
+        const float s = simd_reduce_min(simd_max(vext - 2.0f * margin, kZero3) / (hi - lo));
+        for (simd_float4& l : c.lobes) l *= s;
+        c.lobe_blend *= s;
+        c.height *= s;
+        c.anvil_height *= s;
+        c.radius *= s;
+        c.anvil_spread *= s;
+        c.base_softness *= s;
+        c.base_fade_height *= s;
+        c.erosion_feature_size *= s;
+        c.erosion_amplitude *= s;
+        c.edge *= s;
+        lo *= s;
+        hi *= s;
+    }
+    const simd_float3 slack = simd_max(vext - (hi - lo) - 2.0f * margin, kZero3);
+    c.base_center.x = volume.bounds_min.x + margin - lo.x + uniform(0.0f, 1.0f) * slack.x;
+    c.base_center.z = volume.bounds_min.z + margin - lo.z + uniform(0.0f, 1.0f) * slack.z;
+    c.base_center.y = volume.bounds_min.y + margin - lo.y + uniform(0.0f, 1.0f) * std::min(slack.y, 150.0f);
+    return c;
 }

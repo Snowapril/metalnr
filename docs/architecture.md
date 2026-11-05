@@ -1,24 +1,32 @@
 # Metal Cloud Renderer: Architecture
 
-Status: implemented (M1–M5). The benchmark and evaluation rules are in
-[experiment-protocol.md](experiment-protocol.md). Build and run instructions are in §12.
+Status: implemented. The project replicates Charles Grassi's
+[Neural Shaders, Explained With Clouds](https://charlesgrassi.dev/blog/neural-volumetric-clouds/) on Metal 4.
+The benchmark and evaluation rules are in [experiment-protocol.md](experiment-protocol.md). Build and run
+instructions are in §12.
 
 ## 1. Goal and scope
 
-This is a research renderer for one volumetric cloud. Three methods render the same scene:
+This is a research renderer for one volumetric cumulus cloud. Three methods render the same scene:
 
 1. **Path-traced reference** (`pt`): unbiased apart from a documented bounce cap, with progressive accumulation.
-2. **Analytic** (`analytic`): a deterministic real-time ray march with an approximate multiple-scattering model.
-3. **Neural** (`neural`): the analytic march, with the multiple-scattering term replaced by a small MLP.
+2. **Analytic** (`analytic`): the article's "usual way": a ray march with Henyey–Greenstein single scattering, three
+   Wrenninge multiple-scattering octaves and a two-direction ambient term.
+3. **Neural** (`neural`): the same march, with the in-scattered radiance at each step predicted by a 13-input MLP.
 
 The deliverables are the CLI `cloudnr` and a minimal interactive viewer (`cloudnr view`). It is not an engine.
 There is no render graph, ECS, plugin system, scripting, or editor.
 
-Decisions already made:
+Decisions:
 
-- Neural method: learned in-scattering in the style of Deep Scattering (Kallweit et al. 2017), reduced so it runs in real time (§8).
-- Density: procedural only, baked into a 3D texture. No VDB import.
-- The CLI and an interactive viewer (AppKit + `CAMetalLayer`, a tone-mapping render pass, orbit camera) are both part of Milestone 1. Benchmarks stay headless.
+- Follow the article: the cumulus shape function, the march, the analytic constants, the 13 descriptor inputs, the
+  13→16→16→3 squared-ReLU network trained on raw targets, and the sun-sweep evaluation.
+- Run the network three ways to exercise Metal 4: hand-written MSL loops (the article's HLSL equivalent), Metal 4
+  Shader ML (`matmul2d` from MetalPerformancePrimitives inside the march), and `MTL4MachineLearningCommandEncoder`
+  (blocked on this machine, §9).
+- Density: the procedural cumulus is baked into a 3D texture with mips. No VDB import.
+- The CLI and an interactive viewer (AppKit + `CAMetalLayer`, a tone-mapping render pass, orbit camera) are both
+  part of Milestone 1. Benchmarks stay headless.
 
 ## 2. Toolchain decisions
 
@@ -55,8 +63,7 @@ Decisions:
 - Rejected alternative: an offline `metallib` built by Xcode. It is blocked by the license and the missing
   toolchain. Revisit it only if runtime compile time becomes a measured problem.
 - **Python** is used only for training (`tools/train.py`), never by the renderer or for evaluation; image metrics
-  are computed in C++. It runs in a venv: `python3 -m venv .venv && .venv/bin/pip install torch numpy`, and the
-  resolved versions are recorded. If torch does not install on Python 3.9, build the venv from Homebrew `python@3.12` instead.
+  are computed in C++. It runs in a venv from `tools/requirements.txt` (torch 2.8.0, numpy 2.0.2, system Python 3.9.6).
 
 ## 3. Module layout
 
@@ -65,7 +72,7 @@ files; renderers are reached only through `makeRenderer`.
 
 | Path | Responsibility |
 |---|---|
-| `src/main.mm` | CLI dispatch: `info`, `render`, `view`, `compare`, `reference`, `dump-training`, `neural-check`, `bench`, `suite` |
+| `src/main.mm` | CLI dispatch: `info`, `render`, `view`, `compare`, `reference`, `dump-training`, `neural-check`, `bench`, `suite`, `sweep` |
 | `src/metal_context.{h,mm}` | Device, `MTL4CommandQueue`, `MTL4Compiler`, `MTL4CommandAllocator`s, `MTLResidencySet`, `MTLSharedEvent`, command feedback errors, pipeline creation from source |
 | `src/scene.{h,mm}` | `Scene` and `RenderConfig` structs. JSON load/save uses `NSJSONSerialization` (native, so no JSON library). |
 | `src/shared_types.h` | POD structs shared by C++ and MSL, each with an explicit `static_assert` on its size |
@@ -75,8 +82,8 @@ files; renderers are reached only through `makeRenderer`.
 | `src/renderer.h`, `src/renderer_registry.mm` | `Renderer` interface; `makeRenderer` maps `config.renderer` to a factory |
 | `src/density_renderer.{h,mm}` | `density` renderer: density visualization (M1) |
 | `src/viewer.{h,mm}` | AppKit window, `CAMetalLayer`, display pass, orbit camera |
-| `src/shaders/common.metal` | Camera ray, AABB clip, density sample, $\sigma_t$, HG eval and sample, PCG RNG, environment lookup, ratio/delta tracking, random walk, shared march. This is the only copy of the shared physics. |
-| `src/shaders/bake_density.metal` | Procedural / constant density bake |
+| `src/shaders/common.metal` | Camera ray, AABB clip, density sample, $\sigma_t$, HG eval and sample, PCG RNG, environment lookup, ratio/delta tracking, random walk, and the shared march `march_view_ray`. This is the only copy of the shared physics. |
+| `src/shaders/bake_density.metal` | Cumulus / constant density bake |
 | `src/shaders/density_view.metal` | Density visualization kernel |
 | `src/shaders/display.metal` | Viewer tone-mapping pass (`display_vs`, `display_fs`) |
 | `src/analytic_renderer.{h,mm}`, `src/shaders/analytic.metal` | `analytic` renderer (§7) |
@@ -85,7 +92,8 @@ files; renderers are reached only through `makeRenderer`.
 | `src/neural_types.h`, `src/neural_model.{h,mm}`, `src/neural_renderer.{h,mm}`, `src/training_dump.{h,mm}` | `.cnrm` loader, `neural` renderer, `neural-check`, `dump-training` (§8) |
 | `src/shaders/neural_common.metal`, `neural.metal`, `neural_dump.metal` | Descriptor builder and MLP (shared by inference and data generation), render and dataset kernels |
 | `src/bench.{h,mm}`, `src/suite.{h,mm}` | Steady-state benchmark records, full comparison suite and reports (protocol §4–§7) |
-| `experiments/*.json` | Fixed experiment definitions for `suite` |
+| `src/sweep.{h,mm}` | The article's sun sweep (`sweep`, protocol §8) |
+| `experiments/*.json` | Fixed experiment definitions for `suite` and `sweep` |
 | `tests/test_*.mm`, `tests/check.h` | One executable per test file, registered with CTest. `check.h` provides `CHECK`, `CHECK_NEAR`, `checkSummary()`. No test framework. |
 | `tools/train.py`, `tools/requirements.txt` | Neural training and model export (M4); pinned torch/numpy |
 | `scenes/*.json`, `configs/*.json`, `models/` | Scene definitions, renderer configs, model artifacts |
@@ -99,8 +107,8 @@ Every renderer reads the same `Scene`. The physics is implemented once, in `comm
 | World | Right-handed, +Y up, meters |
 | Radiance | Relative linear units |
 | Color | Linear Rec.709/sRGB primaries, 3-channel RGB. The medium is grey ($\sigma$ does not depend on wavelength); only light colors are RGB. |
-| Camera | Pinhole defined by `position`, `target`, up = +Y, and vertical FOV `vfov_deg`. A scene holds a named `cameras` array (`side`, `backlit`). |
-| Pixel filter | `pt`: box filter, uniform jitter inside the pixel. `analytic`/`neural`/`density`: one ray through the pixel center. This causes a small edge-aliasing difference, which counts toward their error. |
+| Camera | Pinhole defined by `position`, `target`, up = +Y, and vertical FOV `vfov_deg`. A scene holds a named `cameras` array (`front`, `side`, `below`). |
+| Pixel filter | `pt`: box filter, uniform jitter inside the pixel. `analytic`/`neural`/`density`: one ray through the pixel center, with a per-pixel dithered march start. |
 | Exposure | Not baked into the PFM. It is applied only for display and display-referred metrics: $\mathrm{display}=\mathrm{srgb\_oetf}\big(x\cdot2^{EV}/(1+x\cdot2^{EV})\big)$ per channel (Reinhard). The PNG writer, the viewer display pass and the C++ metrics apply the same mapping. |
 | Volume | AABB `bounds_min`/`bounds_max` holding a baked `r16Float` 3D texture of size `grid`, with a full mip chain, trilinear sampling with `address::clamp_to_edge`, and an explicit AABB test that returns 0 outside. This keeps a homogeneous box exactly homogeneous up to its faces. |
 | Density | $d\in[0,1]$, clamped at bake time |
@@ -109,42 +117,53 @@ Every renderer reads the same `Scene`. The physics is implemented once, in `comm
 | Sun | Delta directional light. `sun_direction` points toward the sun; `sun_irradiance` is RGB $E_\perp$. The sun disc is not visible to camera rays. |
 | Environment | $L_{env}(\omega)=$ `sky_radiance` if $\omega_y>0$, otherwise `ground_radiance`. The ground is a non-reflecting emitter with default 0. It exists so that a white-furnace test is possible. |
 
-Density is `volume.density`: `"procedural"` (default) or `"constant"` (homogeneous box with `constant_density`,
-default 1.0, used for closed-form validation). Procedural density:
+Density is `volume.density`: `"cumulus"` or `"constant"` (homogeneous box with `constant_density`, default 1.0, used
+for closed-form validation). The cumulus is the article's `Sample()` function, evaluated in cloud-local metres
+$p = x - \text{base\_center}$ and baked at voxel centres:
 
-$$d=\mathrm{saturate}\Big(\mathrm{remap}\big(\mathrm{fbm}_{perlin}(q),\,1-c,\,1\big)\cdot h(y_n)\,s(x_n)\,s(z_n)-e\cdot\mathrm{fbm}_{worley}(4q)\Big)$$
-
-Here $c$ is `coverage`, $e$ is `erosion`, $(x_n,y_n,z_n)\in[0,1]^3$ is the position normalized to the AABB, and
-$q=4\,(x-b_{min})/\max(\text{extent})$. $h(y)=\mathrm{smoothstep}(0,0.1,y)\,(1-\mathrm{smoothstep}(0.6,1,y))$ and
-$s(u)=\mathrm{smoothstep}(0,0.15,u)\,(1-\mathrm{smoothstep}(0.85,1,u))$ fade the density to 0 at all six faces, so the
-AABB never clips a cloud. Perlin fBm has 4 octaves and Worley fBm has 3 (lacunarity 2, gain 0.5). `density_seed` hashes
-the noise offsets. These constants (documented in `src/shaders/bake_density.metal`) define scene `version` 1.
-
-Scene JSON. The keys are load-bearing; unknown keys are an error:
-
-```json
-{"version":2,"name":"eval_medium",
- "cameras":[{"name":"side","position":[1390.109,200,-563.558],"target":[0,200,0],"vfov_deg":40,"exposure_ev":0}],
- "film":{"width":960,"height":540},
- "volume":{"bounds_min":[-400,0,-400],"bounds_max":[400,400,400],"grid":[256,128,256],
-           "density":"procedural","density_seed":1,"coverage":0.5,"erosion":0.3,"constant_density":1.0},
- "medium":{"sigma_t_max":0.04,"albedo":0.99,"hg_g":0.8},
- "light":{"sun_direction":[0.3,0.6,0.74],"sun_irradiance":[3,3,3],
-          "sky_radiance":[0.2,0.3,0.5],"ground_radiance":[0,0,0]}}
+```
+p.xz -= shear * p.y                                              // wind shear
+p.xz /= 1 + anvil_spread / radius * smoothstep(anvil_height, height, p.y)   // anvil warp
+d = max over lobes (smooth, width lobe_blend) of  r_i - |p - c_i|           // welded spheres
+d = smooth_min(d, p.y, base_softness)                            // flat base
+d += fbm(p / erosion_feature_size, erosion_octaves, seed) * erosion_amplitude * smoothstep(0, base_fade_height, p.y)
+density = saturate(d / edge)
 ```
 
-`RenderConfig` uses one JSON file per renderer variant in `configs/`:
+Smooth min/max are Quilez's polynomial forms; fBm is signed gradient noise in $[-1,1]$ with lacunarity 2 and gain
+0.5, seeded by integer hashing. `makeRandomCumulus(seed)` generates training and held-out shapes (4–12 lobes, shear,
+anvil and erosion drawn from fixed ranges, always inside the volume). In JSON, `"cloud":{"generator_seed":N}` expands
+to that shape at load time.
+
+Scene JSON. The keys are load-bearing; unknown keys are an error; `version` must be ≥ 3:
+
+```json
+{"version":3,"name":"cumulus",
+ "cameras":[{"name":"front","position":[0,120,-2300],"target":[0,300,0],"vfov_deg":22,"exposure_ev":0.5}],
+ "film":{"width":960,"height":540},
+ "volume":{"bounds_min":[-500,0,-500],"bounds_max":[500,800,500],"grid":[256,192,256],"density":"cumulus",
+   "cloud":{"base_center":[0,90,0],"lobes":[[0,140,0,190],[-230,110,30,150]],"lobe_blend":35,"shear":[0.08,0.02],
+            "anvil_height":500,"height":640,"anvil_spread":60,"radius":300,"base_softness":10,"base_fade_height":50,
+            "erosion_feature_size":45,"erosion_octaves":5,"erosion_amplitude":40,"edge":12,"seed":1}},
+ "medium":{"sigma_t_max":0.05,"albedo":0.99,"hg_g":0.8},
+ "light":{"sun_direction":[-0.6124,0.5,-0.6124],"sun_irradiance":[12,11.6,10.8],
+          "sky_radiance":[0.18,0.3,0.62],"ground_radiance":[0.08,0.07,0.06]}}
+```
+
+`RenderConfig` uses one JSON file per renderer variant in `configs/`. The march keys (`step_scale`, `max_steps`,
+`min_transmittance`, `dither`, `empty_skip`) are optional for `density`, `analytic` and `neural`:
 
 ```json
 {"renderer":"pt","spp":4096,"seed":1,"max_bounces":0,"rr_start_bounce":16}
-{"renderer":"analytic","primary_steps":128,"shadow_steps":16,"ambient_steps":4,"octaves":4,"ms_a":0.5,"ms_b":0.5,"ms_c":0.5,"ambient":true}
-{"renderer":"neural","model":"models/<name>.cnrm","primary_steps":128,"shadow_steps":16}
-{"renderer":"density","primary_steps":128}
+{"renderer":"analytic","step_scale":1,"max_steps":512,"min_transmittance":0.01,"dither":true,"empty_skip":true,
+ "shadow_steps":6,"shadow_distance":0,"ambient_steps":4,"octaves":3,"ms_a":0.4,"ms_b":0.35,"ms_c":0.1,"ambient":true}
+{"renderer":"neural","model":"models/cumulus_single.cnrm","inference":"scalar"}
+{"renderer":"density"}
 ```
 
-In the `pt` config, `max_bounces=0` means unlimited. In the `analytic` config, `octaves=1` and `ambient=false`
-reduce it to single scattering. The `density` renderer marches $\sigma_t$ only and shows $1-T$ over the environment.
-Any change to a scene file requires a bump of its `version`.
+In the `pt` config, `max_bounces=0` means unlimited. `configs/analytic_ss.json` (`octaves` 1, no ambient, no dither,
+no early termination, fine steps) is exact single scattering for validation. The `density` renderer marches
+$\sigma_t$ only and shows $1-T$ over the environment. Any change to a scene file requires a bump of its `version`.
 
 ## 5. Radiative transfer
 
@@ -156,16 +175,13 @@ Volume rendering form along a camera ray $x_t=x+t\omega$, clipped to the AABB:
 
 $$L(x,\omega)=\int_0^{t_{max}}T(x,x_t)\,\sigma_s(x_t)\,L_s(x_t,\omega)\,dt+T(x,x_{t_{max}})\,L_{env}(\omega),\qquad T(a,b)=\exp\Big(-\int_a^b\sigma_t\Big)$$
 
-All renderers split the in-scattered radiance $L_s$ the same way:
+The shared march evaluates the in-scattered radiance $L_s(x,\omega)$ at each step. In a grey medium the RTE is linear
+in the sources, so
 
-$$L_s=\underbrace{p(\omega_{sun}\to\omega)\,T_{sun}(x)\,E_{sun}}_{L_{ss}}+L_{rest}$$
+$$L_s(x,\omega)=f_{sun}(x,\omega)\,E_{sun}+f_{sky}(x,\omega)\,L_{sky}+f_{gnd}(x,\omega)\,L_{gnd}$$
 
-$L_{rest}$ contains sky in-scattering and every multiply-scattered sun and sky path. In a grey medium the RTE is
-linear in the sources, so
-
-$$L_{rest}(x,\omega)=f_{sun}(x,\omega)\,E_{sun}+f_{sky}(x,\omega)\,L_{sky}+f_{gnd}(x,\omega)\,L_{gnd}$$
-
-where the $f$ terms are scalars. The analytic and neural methods approximate only $L_{rest}$.
+where the $f$ terms are scalars. The analytic method approximates $L_s$ with closed-form terms; the neural method
+predicts $(f_{sun},f_{sky},f_{gnd})$. This is the article's "one line the network replaces".
 
 Assumptions: there is no medium outside the AABB, no atmosphere or aerosol, no ground reflection, and the
 sun is a delta light. HG is used instead of Mie, so fogbow and glory are not modeled.
@@ -186,66 +202,90 @@ Each dispatch uses one thread per pixel and computes one sample. Accumulation is
 - **Accumulation**: a float32 running mean $m\leftarrow m+(x-m)/n$, to limit precision loss at high spp.
 - `max_bounces` is used only for validation, for example `max_bounces=1` isolates single scattering.
 
-## 7. Analytic baseline
+## 7. Shared march and analytic baseline
 
-A deterministic ray march takes `primary_steps` uniform steps across the AABB intersection, sampling at the midpoint of each step.
+`march_view_ray` (common.metal) is the article's loop, shared by `density`, `analytic` and `neural`:
 
-- $L_{ss}$: a sun shadow march of `shadow_steps` uniform steps to the AABB exit gives $\tau_{sun}$.
-- $L_{rest}$ uses Wrenninge 2013 octaves, where $i=0$ is $L_{ss}$, plus a hemispherical ambient term:
+- Step length $\Delta = $ `voxel_min_extent` × `step_scale`. The first segment is $\Delta$ times a per-pixel
+  interleaved-gradient-noise value in $(0,1]$ (`dither`), so pixels do not sample at the same depths. Each segment
+  is sampled at its midpoint with its own length.
+- `empty_skip`: if mip 3 reads zero at a segment start, the surrounding 8-voxel region is empty and the march skips
+  whole segments (the samples stay on the same grid, so the image is unchanged; test-verified).
+- Each step adds $T\,\alpha\,L_s\,(1-e^{-\sigma_t\Delta})$ (Hillaire 2015) and multiplies $T$ by $e^{-\sigma_t\Delta}$.
+- The march stops when $T<$ `min_transmittance` (0.01; bias at most 1% of the remaining radiance) or after
+  `max_steps`. It returns $(L+T\,L_{env},\ 1-T)$; the alpha channel is the cloud mask used by the sun sweep.
 
-$$L_{rest}\approx\sum_{i=1}^{N-1}b^i\,E_{sun}\,p_{g c^i}(\cos\theta)\,e^{-a^i\tau_{sun}}+\tfrac12\big(L_{sky}e^{-\tau_{up}}+L_{gnd}e^{-\tau_{down}}\big)$$
+The analytic shade function, with the article's constants $(a,b,c)=(0.4,0.35,0.1)$ and $N=3$ octaves:
 
-  Here $N=$ `octaves` and $(a,b,c)=$ (`ms_a`,`ms_b`,`ms_c`). $\tau_{up}$ and $\tau_{down}$ come from `ambient_steps`-step marches straight up and straight down to the AABB exit.
-- Each step is integrated in the energy-conserving form (Hillaire 2015): $\int_{\Delta t}T\sigma_sL_s\approx T\,\alpha\,L_s\,(1-e^{-\sigma_t\Delta t})$, followed by $T\leftarrow Te^{-\sigma_t\Delta t}$.
-- The march never terminates early, because that would bias the fixed-cost comparison.
+$$L_s\approx\sum_{i=0}^{N-1}b^i\,E_{sun}\,p_{g c^i}(\cos\theta)\,e^{-a^i\tau_{sun}}+\tfrac12\big(L_{sky}e^{-\tau_{up}}+L_{gnd}e^{-\tau_{down}}\big)$$
 
-Approximations: the octave terms are not energy-conserving, ambient occlusion is estimated from only two
-directions, and the march has discretization bias in both the primary and the shadow rays.
+$\tau_{sun}$ comes from `shadow_steps` (6) midpoint samples toward the sun, $\tau_{up}$ and $\tau_{down}$ from
+`ambient_steps` (4) samples straight up and down: 14 sequential texture reads per step, as in the article.
+
+Approximations: the octave terms are not energy-conserving, ambient occlusion is estimated from two directions, and
+the march has discretization bias. The sun sweep (protocol §8) measures how the resulting error moves with the sun.
 
 ## 8. Neural renderer
 
-The neural renderer uses the same march, $L_{ss}$ and integrator as the analytic renderer, and replaces only
-$L_{rest}$ with an MLP. The two approximations therefore differ in exactly one term.
+The neural renderer uses the same march and integrator as the analytic renderer and replaces only the shade
+function, so the two differ in exactly one term.
 
-**Descriptor**: 40 floats, built by one function in `neural_common.metal` that both inference and data generation use.
+**Descriptor** (13 floats, `build_descriptor` in `neural_common.metal`, shared by inference and data generation):
 
-- Local frame: $z$ points toward the sun. $x$ is the view direction projected perpendicular to $z$. If the two are parallel, fall back to world X.
-- Levels $\ell=0..4$ with spacing $h_\ell=h_0 2^\ell$, where $h_0$ is the smallest voxel extent. Each level samples mip $\ell$ at 7 points (the center and $\pm x,\pm y,\pm z$). Each input is $\log(1+\sigma_{t,max}\,d\,h_\ell)$. This gives 35 values.
-- The remaining inputs are $\cos\theta_{view,sun}$, world +Y in the local frame (3 values), and $T_{sun}$. Total: 40.
+- Radii fixed in metres: $r\in\{6,12,24,48,96,192\}$. Each radius reads the density mip at
+  $\mathrm{lod}=\log_2(r/\text{voxel})$, so every input is one texture fetch.
+- Inputs 0–5: $\sigma_t$ at $x$ for each radius. Inputs 6–11: $\sigma_t$ at $x+r\,\omega_{sun}$. Input 12:
+  $\cos(\text{view},\text{sun})$ = `dot(d, sun_direction)`.
+- Metric radii are what lets one network serve any bake resolution and cloud size.
 
-**MLP**: 40→32→32→32→3 with ReLU. From the outputs $y$, $f=\mathrm{expm1}(\max(y,0))$ gives $(f_{sun},f_{sky},f_{gnd})$.
+**Network**: standardize $(x-\mu)\cdot s$, then 13→16→16→3 with squared-ReLU hidden activations and a squared
+output (non-negative by construction), clamped at 1.5× the largest training target. 512 multiply-adds per step.
+Outputs are $(f_{sun},f_{sky},f_{gnd})$; the shader combines them with the scene's lights.
 
-- Inference is hand-written MSL. Weights and activations are half precision, and accumulation is float. The weights live in a buffer. The dimensions are injected as `#define` constants from the model header when the shader is compiled at runtime.
-- `MTLTensor`, MetalPerformancePrimitives `matmul2d` and `MTL4MachineLearningCommandEncoder` are not used. A 3.4k-MAC MLP does not need them, and Apple7 support for shader tensor ops was not verified. Revisit them only if profiling shows that the MLP dominates frame time.
+**Inference variants** (`RenderConfig.inference`):
+
+- `scalar`: hand-written MSL loops over fp32 weights in a device buffer (the article's HLSL).
+- `shader_ml`: Metal 4 Shader ML. `<metal_tensor>` + MetalPerformancePrimitives `matmul2d` with
+  `execution_thread`, `tensor_inline` thread tensors for activations and device tensors for weights, inside the march.
+  Found constraints on this M1: K must be a multiple of 16 (13 inputs are zero-padded to 16), single-thread N must be
+  1, 2, 4 or a multiple of 8 (3 outputs are padded to 4), the destination accumulates (zeroed first), and weight
+  tensors are `[K][N]` with N contiguous. Weights are fp16, activations and accumulation fp32
+  (`float × half → float`). fp16 activations were tried first and gave 1.08e-2 max relative error; fp32 activations
+  give 3.6e-3.
+- `ml_encoder`: reserved for the `MTL4MachineLearningCommandEncoder` path (§9); the renderer reports it as
+  unavailable.
 
 **Training data** (`cloudnr dump-training`, on the GPU):
 
-- Points are chosen by rejection sampling where $d>0.01$, each with a uniformly random view direction.
-- The descriptor comes from the same `common.metal` function used at inference.
-- Each target is estimated from 1024 paths. Sample $\omega'\sim$ HG at $x$, then run the full path tracer from the next collision with unit sun, sky and ground sources and three separate accumulators. The direct-sun term at $x$ is excluded by construction, so the target is exactly $L_{rest}$.
-- Records are raw little-endian float32 `[40 inputs][3 targets]` after a 64-byte header: magic `CNRD`, `u32` version, record count, seeds, and `hg_g`/`albedo`.
+- Camera-style sampling (the article's fix): a random ray from the bounding sphere toward a random point in the
+  volume is delta-tracked to its first real collision $x$; $\omega$ is the ray direction. This samples the visible
+  surface rather than the unseen interior.
+- Target: the mean over `paths` (256) of the sun term $p(\cos\theta)\,T_{sun}$ (ratio tracking) plus a full random
+  walk from $x$ along an HG-sampled direction, with unit sun, sky and ground accumulated separately.
+- Random-shape mode: shape seeds $[1000,2000)$ train and $[2000,3000)$ validate; per shape a random sun (elevation
+  −10…90°, any azimuth) and $\sigma_{t,max}$ log-uniform in $[0.02,0.1]$. `--fixed-shape` keeps the template cloud
+  and $\sigma_t$ and varies only the sun (the article's single-cloud weights).
+- Records: little-endian float32 `[13 inputs][3 targets]` after a 64-byte `CNRD` v2 header.
 
-**Training** (`tools/train.py`): PyTorch on MPS if available, otherwise CPU. Adam, MSE on $\log1p(f)$, batch size
-4096. Validation data comes from a disjoint seed range (protocol §1), and the checkpoint with the best
-validation loss is exported.
+**Training** (`tools/train.py`): PyTorch on MPS, Adam (3e-3, cosine decay), batch 4096, 60 epochs, MSE on raw
+targets. The article shows that fitting a transformed target (cube root, log) biases the result, because Monte Carlo
+noise does not average through a curved transform. The best-validation checkpoint is exported.
 
-**Model artifact** `models/<name>.cnrm`:
+**Model artifact** `models/<name>.cnrm` v2: header (magic, version, dimensions, `hg_g`, `albedo`, radii,
+standardization, clamp) and fp32 weights; a sidecar JSON records the architecture, hyperparameters, datasets with
+SHA-256, seed ranges, library versions, loss curves, validation Pearson correlation per output and the Shader ML
+fp16 error; a `.check.bin` holds 10,000 validation inputs with PyTorch outputs for `neural-check`. The loader rejects
+a wrong format and any scene whose `hg_g`/`albedo` differ from the model's.
 
-- Header: magic `CNRM`, `u32 format_version=1`, `u32 n_in, n_hidden, n_layers, n_out`, `f32 hg_g, albedo`, `u32 levels`.
-- Body: fp16 weights in row-major order, each layer followed by its biases.
-- Sidecar `<name>.json`: architecture, hyperparameters, dataset seeds and SHA-256, torch version, renderer version, and loss curves.
-- The loader rejects a wrong magic, version or dimensions. It also rejects a scene whose `hg_g` or `albedo` differs from the model's, because the model is valid only for those two values. The $\sigma_t$ scale generalizes through the optical-thickness inputs.
+**Measured models**:
 
-Known bias: noise in the 1024-path targets biases a loss computed in log space ($E[\log1p(\hat f)]\ne\log1p(f)$).
-It is reported with the results.
+| Model | Data | Val. Pearson sun / sky / ground | GPU vs PyTorch (scalar / shader_ml max rel.) |
+|---|---|---|---|
+| `cumulus_single` | `scenes/cumulus.json`, 300×4096 records with random suns (`--fixed-shape`) | 0.89 / 0.61 / 0.60 | 5.2e-6 / 5.7e-3 |
+| `cumulus_net` | 300 random shapes (1.23 M records), validated on 32 held-out shapes | 0.93 / 0.51 / 0.48 | 5.3e-6 / 3.6e-3 |
 
-**Measured (M4, model `models/cloud_mlp.cnrm`)**: training set 409,600 records from 200 procedural scenes
-(density seeds 1000–1199 of the 1000–1999 range, 2048 records each, 1024 paths per target, 12.7 s GPU), validation set
-49,152 records from 24 scenes (seeds 2000–2023). 30 epochs on MPS; best validation loss 2.52e-4 (MSE on
-$\log1p f$), unchanged with fp16 weights. GPU inference (`neural-check`, 10k validation descriptors) matches the
-PyTorch evaluation of the exported fp16 weights within max relative error 3.1e-5. Against the fp32 PyTorch model,
-fp16 weight quantization alone gives mean relative error 3.5e-3 and max 0.13 (rel = |a−b|/(|b|+1e-3), the max on
-near-zero $f_{sun}$ outputs); a 1e-2 max-error parity against fp32 is therefore **not** met by fp16 weights.
+Like the article, sky/ground correlation is limited by the 256-path coin-flip estimate of sky visibility, and the
+single-cloud weights beat the generalist on their own cloud.
 
 ## 9. Metal 4 usage
 
@@ -270,12 +310,24 @@ Every API below was confirmed in the SDK 27.2 headers
 | `CAMetalLayer`, `MTL4CommandQueue waitForDrawable:` / `signalDrawable:` | Viewer drawables |
 | `MTL4RenderPipelineDescriptor`, `MTL4Compiler newRenderPipelineStateWithDescriptor:compilerTaskOptions:error:` | Viewer display pipeline (`display_vs`/`display_fs`, `BGRA8Unorm`) |
 | `MTL4CommandBuffer renderCommandEncoderWithDescriptor:`, `MTL4RenderCommandEncoder setArgumentTable:atStages:`, `drawPrimitives:vertexStart:vertexCount:` | Viewer tone-mapping pass with a fragment-stage argument table |
+| MSL `<metal_tensor>` `tensor<…, tensor_inline>` + `<MetalPerformancePrimitives/MetalPerformancePrimitives.h>` `mpp::tensor_ops::matmul2d<desc, execution_thread>` | Shader ML inference of the MLP inside the march (`inference: shader_ml`); compiles through the runtime `MTL4Compiler` path, verified on the M1 |
 
 Validation runs use `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1`, which was verified to work with the Command Line Tools.
 Benchmarks run without them.
 
-Not used: render pipelines other than the viewer display pass, acceleration structures, MetalFX, CoreML, MPSGraph,
-`MTLTensor`, and `MTL4MachineLearningCommandEncoder`.
+**`MTL4MachineLearningCommandEncoder` (not available on this machine).** The SDK has the encoder, the
+pipeline descriptor, `newMachineLearningPipelineStateWithDescriptor:` and `dispatchNetworkWithIntermediatesHeap:`.
+A network must arrive as an `.mtlpackage` loaded with `newLibraryWithURL:`, and the only producer is Apple's
+offline `metal-package-builder` (Core ML `.mlpackage` → `.mtlpackage`), part of the Xcode Metal toolchain. Here the
+Xcode license is not accepted, so `xcrun` refuses every Xcode tool, and the Command Line Tools ship no
+`metal-package-builder`. A direct test confirmed `newLibraryWithURL:` rejects both a Core ML `.mlpackage` and a
+compiled `.mlmodelc` ("Invalid library file"). Enabling this path needs `sudo xcodebuild -license accept` and the
+Metal toolchain component. For a per-sample MLP evaluated inside a march, the encoder's dispatch-a-whole-network
+model also implies a split pass (write descriptors to a tensor, run the network, march again), so Shader ML is the
+natural fit and is the path used here.
+
+Not used: render pipelines other than the viewer display pass, acceleration structures, MetalFX, CoreML at runtime,
+MPSGraph.
 
 ## 10. Risks and dependencies
 
@@ -283,7 +335,8 @@ Not used: render pipelines other than the viewer display pass, acceleration stru
 - GPU watchdog killing long dispatches: render 1 spp per dispatch, and split into tiles if one dispatch exceeds about 0.5 s.
 - Reference convergence on the M1 may take hours for thick clouds, and the global majorant is inefficient for sparse density.
 - The octave approximation is not energy-conserving, so the analytic error includes a model bias by design.
-- Neural generalization and target noise; the model is restricted to fixed `hg_g`/`albedo`.
+- Neural generalization and target noise; each model is restricted to its trained `hg_g`/`albedo`, and the
+  single-cloud model is only meaningful on `scenes/cumulus.json`.
 - Torch availability on Python 3.9 (fallback: Homebrew `python@3.12`).
 - M1 DVFS and thermal variance in timings: mitigated by warm-up, repeated runs and median statistics (protocol §4).
 - Shader validation overhead: validation is kept out of benchmarks.
@@ -300,8 +353,9 @@ Dependencies: M1 → {M2, M3, M4} → M5.
 | **M1 Metal 4 Foundation** | Window, device init, basic rendering pass, camera controls, procedural density, GPU error validation (`info`, `render`, `view`, `compare`, `density` renderer) | The application visualizes the GPU density field in a window with interactive orbit camera. Tests: scene/config JSON round-trip; PFM round-trip bit-exact; center-pixel ray equals normalize(target−position); bake bit-identical for the same seed and different for another; values in [0,1]; sampling outside the AABB returns 0. |
 | **M2 Analytic baseline** | Beer–Lambert transmittance, ray marching, HG phase, single scattering (§7); octave multiple scattering and the ambient term are optional settings | Matches closed forms for homogeneous media: with $\alpha=0$, pixel $=L_{env}e^{-\sigma_t\ell}$; with the sun perpendicular to a horizontal view ray, $L=\alpha\,E\,p(0)\,e^{-\sigma_t h}(1-e^{-\sigma_t\ell})+T\,L_{env}$ ($h$ the sun-path length inside the box, $\ell$ the view-path length). |
 | **M3 Path-traced reference** | Free-flight sampling, multiple scattering, NEE, progressive accumulation (§6) | Convergence analysis (relMSE of independent halves vs spp falls ~1/spp) and reference images. Tests: white furnace ($\alpha=1$, sky = ground = 1) within 3σ; transmittance $L_{env}e^{-\sigma_t\ell}$ within 3σ; mean HG $\cos\theta=g$ within 3σ for $g\in\{-0.5,0,0.8\}$; same seed bit-identical; `max_bounces=1` matches analytic single scattering. |
-| **M4 Neural renderer** | Target $L_{rest}$, dataset generation (`dump-training`), training (`train.py`), weight conversion to `.cnrm`, Metal inference (§8) | Image-quality comparison vs the `pt` reference and GPU inference timing on unseen evaluation scenes. |
+| **M4 Neural renderer** | Target $L_s$, dataset generation (`dump-training`), training (`train.py`), `.cnrm` export, Metal inference (§8) | Image-quality comparison vs the `pt` reference and GPU inference timing on unseen evaluation scenes. |
 | **M5 Benchmarking** | Unified framework (`bench`, `suite`), identical scene/camera configs; GPU time, PSNR, SSIM, relMSE, memory | Reproducible fixed configs, automated metric collection, exportable JSON/CSV/Markdown reports (protocol §6). |
+| **R Article replication** | The article's cumulus, march, analytic constants, 13-input network, camera-style data, raw-target training, sun sweep (`sweep`); Shader ML inference | Closed-form march tests; scalar GPU inference within 1e-5 and Shader ML within 1e-2 of PyTorch; sun sweep and held-out suite reports (protocol §8). |
 
 Test coverage required by AGENTS.md maps as follows. Camera transforms, density sampling, config serialization: M1.
 Phase function, transmittance and extinction: M2/M3. Deterministic benchmark configs and image metrics: M1 (`compare`) and M5.
@@ -312,13 +366,21 @@ Phase function, transmittance and extinction: M2/M3. Deterministic benchmark con
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ctest --test-dir build --output-on-failure          # tests run under the Metal validation layer
 ./build/cloudnr info
-./build/cloudnr view   --scene scenes/eval_medium.json --config configs/analytic.json    # keys 1-4 switch renderer
-./build/cloudnr render --scene scenes/eval_medium.json --camera backlit --config configs/pt.json --png out/pt.png
-./build/cloudnr reference --scene scenes/eval_thin.json --spp 1024 --out out/ref
-./build/cloudnr dump-training --out data/train.cnrd --seed-begin 1000 --seed-end 2000 --scenes 200 --records-per-scene 2048
-./build/cloudnr dump-training --out data/val.cnrd   --seed-begin 2000 --seed-end 3000 --scenes 24  --records-per-scene 2048
-.venv/bin/python tools/train.py --train data/train.cnrd --val data/val.cnrd --out models/cloud_mlp
-./build/cloudnr neural-check --model models/cloud_mlp.cnrm --check models/cloud_mlp.check.bin
+./build/cloudnr view   --scene scenes/cumulus.json --config configs/analytic.json    # keys 1-4 switch renderer
+./build/cloudnr render --scene scenes/cumulus.json --camera front --config configs/neural_single_shaderml.json --png out/nn.png
+./build/cloudnr reference --scene scenes/cumulus.json --camera front --spp 1024 --out out/ref
+# Single-cloud model (the article's weights): one cloud, random suns
+./build/cloudnr dump-training --fixed-shape --template scenes/cumulus.json --out data/single_train.cnrd \
+    --shape-begin 1 --shape-end 2 --shapes 300 --records-per-shape 4096
+./build/cloudnr dump-training --fixed-shape --template scenes/cumulus.json --out data/single_val.cnrd \
+    --shape-begin 7 --shape-end 8 --shapes 32 --records-per-shape 4096
+.venv/bin/python tools/train.py --train data/single_train.cnrd --val data/single_val.cnrd --out models/cumulus_single
+# Generalist model: random shapes, held-out validation shapes
+./build/cloudnr dump-training --out data/train.cnrd --shape-begin 1000 --shape-end 2000 --shapes 300 --records-per-shape 4096
+./build/cloudnr dump-training --out data/val.cnrd   --shape-begin 2000 --shape-end 3000 --shapes 32  --records-per-shape 4096
+.venv/bin/python tools/train.py --train data/train.cnrd --val data/val.cnrd --out models/cumulus_net
+./build/cloudnr neural-check --model models/cumulus_net.cnrm --check models/cumulus_net.check.bin
+./build/cloudnr sweep --experiment experiments/sweep.json      # the article's sun sweep; --quick for a smoke run
 ./build/cloudnr suite --experiment experiments/eval.json      # add --quick for a smoke run
 ```
 

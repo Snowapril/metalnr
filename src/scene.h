@@ -17,14 +17,32 @@ struct CameraDesc {
     float exposure_ev = 0.0f;
 };
 
+// The article's cumulus (docs/architecture.md §4). Lengths in metres, cloud-local frame with the origin at
+// base_center (centre of the flat base, +Y up). JSON object "volume.cloud".
+struct CloudDesc {
+    simd_float3 base_center{0, 100, 0};    // world position of the cloud-local origin
+    std::vector<simd_float4> lobes;        // xyz centre, w radius; 1..CNR_MAX_LOBES
+    float lobe_blend = 40.0f;
+    simd_float2 shear{0.15f, 0.0f};        // horizontal offset per metre of height (x, z)
+    float anvil_height = 450.0f;
+    float height = 600.0f;
+    float anvil_spread = 120.0f;
+    float radius = 250.0f;
+    float base_softness = 15.0f;
+    float base_fade_height = 60.0f;
+    float erosion_feature_size = 60.0f;
+    uint32_t erosion_octaves = 4;
+    float erosion_amplitude = 35.0f;
+    float edge = 25.0f;                    // field value that maps to density 1
+    uint32_t seed = 1;                     // erosion noise seed
+};
+
 struct VolumeDesc {
-    simd_float3 bounds_min{-400, 0, -400};
-    simd_float3 bounds_max{400, 400, 400};
-    simd_uint3 grid{256, 128, 256};
-    std::string density = "procedural";  // "procedural" | "constant"
-    uint32_t density_seed = 1;
-    float coverage = 0.5f;
-    float erosion = 0.3f;
+    simd_float3 bounds_min{-500, 0, -500};
+    simd_float3 bounds_max{500, 800, 500};
+    simd_uint3 grid{256, 192, 256};
+    std::string density = "cumulus";     // "cumulus" | "constant"
+    CloudDesc cloud;                     // only for density == "cumulus"
     float constant_density = 1.0f;       // only for density == "constant"
 };
 
@@ -59,16 +77,20 @@ struct Scene {
 // renderer are serialized; the others keep their defaults.
 struct RenderConfig {
     std::string renderer = "density";
-    // density, analytic, neural
-    uint32_t primary_steps = 128;
-    // analytic, neural
-    uint32_t shadow_steps = 16;
+    // density, analytic, neural: the shared march (MarchParams)
+    float step_scale = 1.0f;            // step = voxel_min_extent * step_scale
+    uint32_t max_steps = 512;
+    float min_transmittance = 0.01f;    // 0 disables early termination
+    bool dither = true;
+    bool empty_skip = true;
     // analytic
+    uint32_t shadow_steps = 6;
+    float shadow_distance = 0.0f;       // m; 0 = to the AABB exit
     uint32_t ambient_steps = 4;
-    uint32_t octaves = 4;
-    float ms_a = 0.5f;
-    float ms_b = 0.5f;
-    float ms_c = 0.5f;
+    uint32_t octaves = 3;
+    float ms_a = 0.4f;
+    float ms_b = 0.35f;
+    float ms_c = 0.1f;
     bool ambient = true;
     // pt
     uint32_t spp = 4096;
@@ -76,8 +98,16 @@ struct RenderConfig {
     uint32_t max_bounces = 0;  // 0 = unlimited
     uint32_t rr_start_bounce = 16;
     // neural
-    std::string model;  // path to .cnrm, relative to the working directory
+    std::string model;              // path to .cnrm, relative to the working directory
+    std::string inference = "scalar";  // "scalar" (hand-written MSL) | "shader_ml" (matmul2d) | "ml_encoder"
 };
+
+// The MarchParams for config (march fields only).
+MarchParams makeMarchParams(const RenderConfig& config);
+
+// Deterministic random cumulus for training and held-out shapes: lobe layout, shear, anvil and
+// erosion parameters derived from `seed` (std::mt19937_64), sized to fit `volume` bounds.
+CloudDesc makeRandomCumulus(uint32_t seed, const VolumeDesc& volume);
 
 std::optional<Scene> loadScene(const std::string& path, std::string* error);
 bool saveScene(const Scene& scene, const std::string& path, std::string* error);

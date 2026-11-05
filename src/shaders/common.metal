@@ -243,27 +243,83 @@ inline WalkResult random_walk(texture3d<float> tex, constant SceneGPU& s, Ray r,
     return res;
 }
 
-template <typename LRest>
-inline float3 march_view_ray(texture3d<float> tex, constant SceneGPU& s, Ray r, uint primary_steps,
-                             uint shadow_steps, thread LRest& lrest) {
+// ---- Shared view march (the article's ray march; analytic and neural renderers) ----
+
+// Coarse mip level probed by the empty-space skip: one texel covers 8^3 finest voxels.
+constant float kEmptySkipLod = 3.0f;
+
+struct MarchSettings {
+    float step;               // m, nominal segment length
+    float min_transmittance;  // stop once T falls below this (0 disables)
+    uint max_steps;           // segments, including skipped ones
+    uint flags;               // CNR_MARCH_*
+    float jitter;             // (0, 1]: length of the first segment in steps
+};
+
+// Interleaved gradient noise (Jimenez 2014), in [0, 1).
+inline float interleaved_gradient_noise(float2 pixel) {
+    return fract(52.9829189f * fract(dot(pixel, float2(0.06711056f, 0.00583715f))));
+}
+
+inline MarchSettings make_march_settings(constant SceneGPU& s, MarchParams p, uint2 pixel) {
+    MarchSettings m;
+    m.step = s.voxel_min_extent * p.step_scale;
+    m.min_transmittance = p.min_transmittance;
+    m.max_steps = p.max_steps;
+    m.flags = p.flags;
+    m.jitter = (p.flags & CNR_MARCH_DITHER) != 0u ? 1.0f - interleaved_gradient_noise(float2(pixel)) : 1.0f;
+    return m;
+}
+
+// Front-to-back march along r through the AABB. Segment k spans [b_k, b_{k+1}] with b_0 = t0 and
+// b_k = t0 + (jitter + k - 1) * step (k >= 1), the last one clipped at t1; each segment is sampled at its
+// midpoint with its own length dt (exact for a homogeneous medium, dithered otherwise). shade(x, d) returns
+// the in-scattered radiance at x toward -d before albedo; each shaded segment adds the energy-conserving
+// T * albedo * Ls * (1 - exp(-sigma dt)) (Hillaire 2015). Returns float4(L + T * L_env, 1 - T).
+//
+// EMPTY_SKIP: a lod-kEmptySkipLod sample <= 0 at the segment start proves the 2^3 coarse texels around it are
+// empty, i.e. the field is 0 within 0.5 * 8 voxels; trilinear fine samples are then 0 up to 3.5 voxels away.
+// The skip jumps over the whole segments whose midpoints lie within that radius, so the sample positions stay
+// on the same lattice and the result equals the unskipped march (a skip counts as one step).
+template <typename Shade>
+inline float4 march_view_ray(texture3d<float> tex, constant SceneGPU& s, Ray r, MarchSettings m,
+                             thread Shade& shade) {
+    float3 env = env_radiance(s, r.d);
     float t0, t1;
-    if (primary_steps == 0u || !intersect_aabb(r, s.bounds_min, s.bounds_max, t0, t1)) {
-        return env_radiance(s, r.d);
+    if (m.step <= 0.0f || !intersect_aabb(r, s.bounds_min, s.bounds_max, t0, t1)) {
+        return float4(env, 0.0f);
     }
-    float dt = (t1 - t0) / float(primary_steps);
-    float phase_sun = hg_eval(dot(s.sun_direction, r.d), s.hg_g);
+    // Segments k .. k+n-1 have midpoints within (n - 0.5) * step of b_k; pick the largest n keeping them within
+    // 3.5 voxels (n = 4 at step_scale 1, i.e. the 0.5 * 8 voxel jump). n = 0 (step > 7 voxels) disables the skip.
+    uint skip_segments = 0u;
+    if ((m.flags & CNR_MARCH_EMPTY_SKIP) != 0u && s.mip_levels > uint(kEmptySkipLod)) {
+        skip_segments = uint(floor((0.5f * 8.0f - 0.5f) * s.voxel_min_extent / m.step + 0.5f + 1e-3f));
+    }
     float T = 1.0f;
     float3 L = float3(0.0f);
-    for (uint i = 0u; i < primary_steps; ++i) {
-        float3 x = r.o + (t0 + (float(i) + 0.5f) * dt) * r.d;
+    uint k = 0u;
+    for (uint i = 0u; i < m.max_steps; ++i) {
+        float a = k == 0u ? t0 : t0 + (m.jitter + float(k - 1u)) * m.step;
+        if (a >= t1) {
+            break;
+        }
+        if (skip_segments > 0u && density_at(tex, s, r.o + a * r.d, kEmptySkipLod) <= 0.0f) {
+            k += skip_segments;
+            continue;
+        }
+        float b = min(t0 + (m.jitter + float(k)) * m.step, t1);
+        float dt = b - a;
+        float3 x = r.o + (a + 0.5f * dt) * r.d;
         float sig = sigma_t_at(tex, s, x);
         if (sig > 0.0f) {
-            float tau_sun = march_optical_depth(tex, s, x, s.sun_direction, shadow_steps);
-            float3 Ls = phase_sun * precise::exp(-tau_sun) * s.sun_irradiance + lrest(x, r.d, tau_sun);
-            // Energy-conserving step (Hillaire 2015): int_0^dt T e^{-sig t} sig_s Ls dt.
+            float3 Ls = shade(x, r.d);
             L += T * s.albedo * Ls * one_minus_exp_neg(sig * dt);
             T *= precise::exp(-sig * dt);
+            if (T < m.min_transmittance) {
+                break;
+            }
         }
+        ++k;
     }
-    return L + T * env_radiance(s, r.d);
+    return float4(L + T * env, 1.0f - T);
 }

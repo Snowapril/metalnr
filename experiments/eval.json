@@ -1,8 +1,8 @@
 {
   "name": "eval",
-  "scenes": ["scenes/eval_thin.json", "scenes/eval_medium.json", "scenes/eval_thick.json"],
-  "cameras": ["side", "backlit"],
-  "methods": ["configs/analytic.json", "configs/neural.json", "configs/pt_bench.json"],
+  "scenes": ["scenes/cumulus.json", "scenes/cumulus_heldout.json"],
+  "cameras": ["front", "side"],
+  "methods": ["configs/analytic.json", "configs/neural.json", "configs/neural_shaderml.json", "configs/pt_bench.json"],
   "reference": {"config": "configs/pt.json", "initial_spp": 1024, "max_spp": 65536, "abs_gate": 1e-4, "rel_gate": 0.1},
   "timing": {"warmup": 30, "frames": 300, "runs": 3},
   "equal_quality": {"seed": 3, "max_spp": 4096}

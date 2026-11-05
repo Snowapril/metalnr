@@ -1,0 +1,98 @@
+{
+  "bias" : {
+    "bounce_cap_hits" : 0,
+    "mean_bounces" : 0.2297290943287037
+  },
+  "camera" : "side",
+  "config" : {
+    "max_bounces" : 0,
+    "renderer" : "pt",
+    "rr_start_bounce" : 16,
+    "seed" : 3,
+    "spp" : 64
+  },
+  "config_path" : "configs\/pt_bench.json",
+  "cpu_prep_ms" : {
+    "median" : 0.065792000000000003,
+    "p5" : 0.033916000000000002,
+    "p95" : 0.122167,
+    "runs" : [
+      {
+        "median" : 0.067083000000000004,
+        "p5" : 0.032500000000000001,
+        "p95" : 0.12675
+      },
+      {
+        "median" : 0.065792000000000003,
+        "p5" : 0.035000000000000003,
+        "p95" : 0.11570800000000001
+      },
+      {
+        "median" : 0.064833000000000002,
+        "p5" : 0.033916000000000002,
+        "p95" : 0.122167
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 28.2232083263807,
+    "compile" : 0.78954199999999908,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 3.401624970138073,
+    "p5" : 3.3338749781250954,
+    "p95" : 3.5173749784007668,
+    "runs" : [
+      {
+        "median" : 3.401624970138073,
+        "p5" : 3.3355833729729056,
+        "p95" : 3.5173749784007668
+      },
+      {
+        "median" : 3.400249988771975,
+        "p5" : 3.3317083143629134,
+        "p95" : 3.5099166561849415
+      },
+      {
+        "median" : 3.4099583281204104,
+        "p5" : 3.3338749781250954,
+        "p95" : 3.5280833253636956
+      }
+    ]
+  },
+  "gpu_ms_per_spp" : 3.401624970138073,
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 37748736,
+    "device_delta" : 8355840,
+    "renderer" : 8356880
+  },
+  "metrics" : {
+    "psnr" : 40.177181047482094,
+    "relMSE" : 0.0037079094805578376,
+    "ssim" : 0.98043823606676572
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 5.5900913400000001e-05,
+  "reference_id" : "results\/refs\/cumulus_heldout_side\/ref.json",
+  "reference_spp_per_half" : 2048,
+  "renderer" : "pt",
+  "renderer_version" : "ad6fd7e-dirty",
+  "scene" : "cumulus_heldout",
+  "scene_version" : 3,
+  "seed" : 3,
+  "spp_or_quality" : {
+    "spp" : 64
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

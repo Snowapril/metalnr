@@ -1,0 +1,98 @@
+{
+  "bias" : {
+    "bounce_cap_hits" : 0,
+    "mean_bounces" : 2.0628091242283952
+  },
+  "camera" : "side",
+  "config" : {
+    "max_bounces" : 0,
+    "renderer" : "pt",
+    "rr_start_bounce" : 16,
+    "seed" : 3,
+    "spp" : 64
+  },
+  "config_path" : "configs\/pt_bench.json",
+  "cpu_prep_ms" : {
+    "median" : 0.078541,
+    "p5" : 0.047125,
+    "p95" : 0.126917,
+    "runs" : [
+      {
+        "median" : 0.080125000000000002,
+        "p5" : 0.047125,
+        "p95" : 0.127
+      },
+      {
+        "median" : 0.078541,
+        "p5" : 0.047625000000000001,
+        "p95" : 0.126917
+      },
+      {
+        "median" : 0.076082999999999998,
+        "p5" : 0.042833000000000003,
+        "p95" : 0.126167
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 28.205375012475997,
+    "compile" : 0.68120899999999907,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 7.5896250200457871,
+    "p5" : 7.4766249745152891,
+    "p95" : 7.8506250283680856,
+    "runs" : [
+      {
+        "median" : 7.5893333414569497,
+        "p5" : 7.4703750433400273,
+        "p95" : 7.8290416859090328
+      },
+      {
+        "median" : 7.5896250200457871,
+        "p5" : 7.4766249745152891,
+        "p95" : 7.8572499915026128
+      },
+      {
+        "median" : 7.5905833509750664,
+        "p5" : 7.4869999662041664,
+        "p95" : 7.8506250283680856
+      }
+    ]
+  },
+  "gpu_ms_per_spp" : 7.5896250200457871,
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 37748736,
+    "device_delta" : 8355840,
+    "renderer" : 8356880
+  },
+  "metrics" : {
+    "psnr" : 29.647631087295512,
+    "relMSE" : 0.065677225250191887,
+    "ssim" : 0.87272379343117379
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 7.0494351499999998e-05,
+  "reference_id" : "results\/refs\/cumulus_side\/ref.json",
+  "reference_spp_per_half" : 32768,
+  "renderer" : "pt",
+  "renderer_version" : "ad6fd7e-dirty",
+  "scene" : "cumulus",
+  "scene_version" : 3,
+  "seed" : 3,
+  "spp_or_quality" : {
+    "spp" : 64
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

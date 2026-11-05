@@ -1,5 +1,9 @@
-// Density visualization: optical depth along one pixel-center ray, shown as white
-// over the environment: out = mix(L_env, 1, 1 - T), T = exp(-tau).
+// Density visualization: the shared march (march_view_ray) with zero in-scattering, shown as white
+// over the environment. The march returns (T * L_env, alpha = 1 - T); out = (mix(L_env, 1, alpha), alpha).
+
+struct DensityShade {
+    float3 operator()(float3, float3) { return float3(0.0f); }
+};
 
 kernel void density_view(constant SceneGPU& s [[buffer(0)]],
                          constant DensityViewParams& v [[buffer(1)]],
@@ -10,7 +14,9 @@ kernel void density_view(constant SceneGPU& s [[buffer(0)]],
         return;
     }
     Ray r = camera_ray(s, float2(gid) + 0.5f);
-    float tau = march_optical_depth(density, s, r.o, r.d, v.steps);
-    float T = exp(-tau);
-    out.write(float4(mix(env_radiance(s, r.d), float3(1.0f), 1.0f - T), 1.0f), gid);
+    MarchSettings m = make_march_settings(s, v.march, gid);
+    DensityShade shade;
+    float4 res = march_view_ray(density, s, r, m, shade);
+    float alpha = res.w;
+    out.write(float4(mix(env_radiance(s, r.d), float3(1.0f), alpha), alpha), gid);
 }

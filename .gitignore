@@ -4,7 +4,7 @@ __pycache__/
 .DS_Store
 out/
 
-# Regenerable large artifacts (see README "Reproducing the results")
+# Regenerable large artifacts (see README "Training the networks" and "Usage")
 data/
 results/refs/
 results/refs_quick/

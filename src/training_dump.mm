@@ -22,11 +22,15 @@
 
 namespace {
 
-constexpr uint32_t kPathsPerThread = 64;
-constexpr uint32_t kMaxTries = 1024;
+constexpr uint32_t kPathsPerThread = 32;
+constexpr uint32_t kMaxTries = 64;                       // camera rays per record
 constexpr uint64_t kThreadCapacity = uint64_t(1) << 17;  // per dispatch
 constexpr double kTargetBatchMs = 150.0;                 // well below the ~0.5 s watchdog budget
-constexpr uint32_t kFirstEvalSeedExcluded = 1000;        // seeds 1-999 are evaluation seeds
+constexpr uint32_t kFirstTrainingSeed = 1000;            // shape seeds 1-999 are reserved for evaluation
+constexpr float kSigmaMin = 0.02f;                       // log-uniform sigma_t_max range (1/m)
+constexpr float kSigmaMax = 0.1f;
+constexpr double kSunElevationMinDeg = -10.0;
+constexpr double kSunElevationMaxDeg = 90.0;
 constexpr NSUInteger kParamsOffset = 256;
 constexpr NSUInteger kParamsSize = 512;
 static_assert(sizeof(SceneGPU) <= kParamsOffset, "SceneGPU must fit before the dump params");
@@ -38,10 +42,10 @@ int fail(const std::string& message) {
 }
 
 bool parseUint(const std::string& text, uint32_t* out) {
-    if (text.empty()) return false;
+    if (text.empty() || text[0] == '-') return false;
     char* end = nullptr;
     const unsigned long long value = std::strtoull(text.c_str(), &end, 10);
-    if (*end != '\0' || value > 0xFFFFFFFFull || text[0] == '-') return false;
+    if (*end != '\0' || value > 0xFFFFFFFFull) return false;
     *out = static_cast<uint32_t>(value);
     return true;
 }
@@ -56,35 +60,40 @@ std::string jsonEscape(const std::string& s) {
     return out + "\"";
 }
 
-// Randomized training scene k (protocol §1), deterministic in (seedBegin, k).
-struct DumpScene {
+// Training shape k, deterministic in (shapeBegin, k). fixedShape keeps the template cloud and sigma_t_max
+// (the article's single-cloud weights); otherwise the cloud and sigma_t_max are randomized.
+struct DumpShape {
     Scene scene;
+    uint32_t shapeSeed = 0;
     uint32_t dumpSeed = 0;
     double sunElevationDeg = 0.0;
 };
 
-DumpScene makeDumpScene(const Scene& templ, uint32_t seedBegin, uint32_t seedEnd, uint32_t k) {
-    std::seed_seq seq{seedBegin, k};
+DumpShape makeDumpShape(const Scene& templ, uint32_t shapeBegin, uint32_t shapeEnd, uint32_t k, bool fixedShape) {
+    std::seed_seq seq{shapeBegin, k};
     std::mt19937_64 rng(seq);
     // 53-bit uniform in [0, 1); independent of the standard library's distribution algorithms.
     auto uniform = [&rng] { return double(rng() >> 11) * 0x1.0p-53; };
 
-    DumpScene out;
+    DumpShape out;
+    out.shapeSeed = shapeBegin + k % (shapeEnd - shapeBegin);
     out.scene = templ;
     Scene& s = out.scene;
-    s.name = templ.name + "_dump_" + std::to_string(k);
-    s.volume.density = "procedural";
-    s.volume.density_seed = seedBegin + k % (seedEnd - seedBegin);
-
+    if (!fixedShape) {
+        s.name = templ.name + "_shape_" + std::to_string(out.shapeSeed);
+        s.volume.density = "cumulus";
+        s.volume.cloud = makeRandomCumulus(out.shapeSeed, s.volume);
+    }
     const double kPi = 3.14159265358979323846;
-    out.sunElevationDeg = 5.0 + 85.0 * uniform();
+    out.sunElevationDeg = kSunElevationMinDeg + (kSunElevationMaxDeg - kSunElevationMinDeg) * uniform();
     const double elevation = out.sunElevationDeg * kPi / 180.0;
     const double azimuth = 2.0 * kPi * uniform();
     s.light.sun_direction = simd_normalize(simd_make_float3(float(std::cos(elevation) * std::cos(azimuth)),
                                                             float(std::sin(elevation)),
                                                             float(std::cos(elevation) * std::sin(azimuth))));
-    const double logMin = std::log(0.005), logMax = std::log(0.15);
-    s.medium.sigma_t_max = float(std::exp(logMin + (logMax - logMin) * uniform()));
+    const double logMin = std::log(double(kSigmaMin)), logMax = std::log(double(kSigmaMax));
+    const float sigma = float(std::exp(logMin + (logMax - logMin) * uniform()));
+    if (!fixedShape) s.medium.sigma_t_max = sigma;
     // Targets are light coefficients; unit sources keep the scene self-consistent.
     s.light.sun_irradiance = simd_make_float3(1, 1, 1);
     s.light.sky_radiance = simd_make_float3(1, 1, 1);
@@ -105,34 +114,36 @@ struct Batch {
 }  // namespace
 
 int cmdDumpTraining(int argc, char** argv) {
-    std::map<std::string, std::string> values = {
-        {"--paths", "1024"}, {"--shadow-steps", "16"}, {"--template", "scenes/eval_medium.json"}};
-    const std::vector<std::string> keys = {"--out",   "--seed-begin",   "--seed-end", "--scenes", "--records-per-scene",
-                                           "--paths", "--shadow-steps", "--template"};
+    std::map<std::string, std::string> values = {{"--paths", "256"}, {"--template", "scenes/cumulus.json"}};
+    const std::vector<std::string> keys = {"--out",    "--shape-begin", "--shape-end", "--shapes",
+                                           "--records-per-shape", "--paths", "--template"};
     bool validate = false;
+    bool fixedShape = false;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--validate") {
             validate = true;
+        } else if (arg == "--fixed-shape") {
+            fixedShape = true;
         } else if (std::find(keys.begin(), keys.end(), arg) != keys.end() && i + 1 < argc) {
             values[arg] = argv[++i];
         } else {
             return fail("unknown or incomplete argument '" + arg + "'");
         }
     }
-    for (const char* required : {"--out", "--seed-begin", "--seed-end", "--scenes", "--records-per-scene"})
+    for (const char* required : {"--out", "--shape-begin", "--shape-end", "--shapes", "--records-per-shape"})
         if (!values.count(required)) return fail(std::string(required) + " is required");
 
-    uint32_t seedBegin = 0, seedEnd = 0, sceneCount = 0, recordsPerScene = 0, paths = 0, shadowSteps = 0;
-    if (!parseUint(values["--seed-begin"], &seedBegin) || !parseUint(values["--seed-end"], &seedEnd) ||
-        !parseUint(values["--scenes"], &sceneCount) || !parseUint(values["--records-per-scene"], &recordsPerScene) ||
-        !parseUint(values["--paths"], &paths) || !parseUint(values["--shadow-steps"], &shadowSteps))
+    uint32_t shapeBegin = 0, shapeEnd = 0, shapeCount = 0, recordsPerShape = 0, paths = 0;
+    if (!parseUint(values["--shape-begin"], &shapeBegin) || !parseUint(values["--shape-end"], &shapeEnd) ||
+        !parseUint(values["--shapes"], &shapeCount) || !parseUint(values["--records-per-shape"], &recordsPerShape) ||
+        !parseUint(values["--paths"], &paths))
         return fail("numeric arguments must be non-negative integers");
-    if (seedBegin < kFirstEvalSeedExcluded)
-        return fail("--seed-begin must be >= 1000 (density seeds 1-999 are reserved for evaluation)");
-    if (seedEnd <= seedBegin) return fail("--seed-end must be greater than --seed-begin (exclusive end)");
-    if (sceneCount == 0 || recordsPerScene == 0 || paths == 0 || shadowSteps == 0)
-        return fail("--scenes, --records-per-scene, --paths and --shadow-steps must be > 0");
+    if (!fixedShape && shapeBegin < kFirstTrainingSeed)
+        return fail("--shape-begin must be >= 1000 (shape seeds 1-999 are reserved for evaluation)");
+    if (shapeEnd <= shapeBegin) return fail("--shape-end must be greater than --shape-begin (exclusive end)");
+    if (shapeCount == 0 || recordsPerShape == 0 || paths == 0)
+        return fail("--shapes, --records-per-shape and --paths must be > 0");
     const uint32_t chunks = (paths + kPathsPerThread - 1) / kPathsPerThread;
     if (chunks > kThreadCapacity) return fail("--paths too large");
     const uint32_t recordCapacity = static_cast<uint32_t>(kThreadCapacity / chunks);
@@ -142,14 +153,16 @@ int cmdDumpTraining(int argc, char** argv) {
     std::string error;
     const std::optional<Scene> templ = loadScene(values["--template"], &error);
     if (!templ) return fail(error);
+    if (fixedShape && templ->volume.density != "cumulus")
+        return fail("--fixed-shape needs a cumulus --template");
     const NeuralDims dims;
-    const uint32_t recordStride = dims.n_in + 1;
 
     auto context = MetalContext::create(&error);
     if (!context) return fail(error);
     id<MTLDevice> device = context->device();
-    id<MTLComputePipelineState> pipeline = context->makeComputePipeline(
-        neuralShaderFiles("src/shaders/neural_dump.metal"), "neural_dump", neuralShaderDefines(dims), &error);
+    id<MTLComputePipelineState> pipeline =
+        context->makeComputePipeline(neuralShaderFiles("src/shaders/neural_dump.metal"), "neural_dump",
+                                     neuralShaderDefines(dims, NeuralInference::Scalar), &error);
     if (!pipeline) return fail(error);
     id<MTL4ArgumentTable> table = context->makeArgumentTable(4, 1, &error);
     if (!table) return fail(error);
@@ -160,7 +173,7 @@ int cmdDumpTraining(int argc, char** argv) {
     std::vector<id<MTLAllocation>> resident;
     for (int i = 0; i < 2; ++i) {
         params[i] = [device newBufferWithLength:kParamsSize options:MTLResourceStorageModeShared];
-        records[i] = [device newBufferWithLength:uint64_t(recordCapacity) * recordStride * sizeof(float)
+        records[i] = [device newBufferWithLength:uint64_t(recordCapacity) * CNR_DUMP_RECORD_STRIDE * sizeof(float)
                                          options:MTLResourceStorageModeShared];
         partials[i] = [device newBufferWithLength:kThreadCapacity * CNR_DUMP_PARTIAL_STRIDE * sizeof(float)
                                           options:MTLResourceStorageModeShared];
@@ -175,18 +188,20 @@ int cmdDumpTraining(int argc, char** argv) {
     if (!file) return fail("cannot open " + outPath + " for writing");
     CnrdHeader header{};
     std::memcpy(header.magic, "CNRD", 4);
-    header.version = 1;
+    header.version = 2;
     header.n_in = dims.n_in;
     header.n_out = dims.n_out;
     header.n_records = 0;
-    header.seed_begin = seedBegin;
-    header.seed_end = seedEnd;
+    header.shape_begin = shapeBegin;
+    header.shape_end = shapeEnd;
+    header.n_shapes = shapeCount;
+    header.records_per_shape = recordsPerShape;
     header.paths = paths;
     header.hg_g = templ->medium.hg_g;
     header.albedo = templ->medium.albedo;
-    header.shadow_steps = shadowSteps;
-    header.n_scenes = sceneCount;
-    header.records_per_scene = recordsPerScene;
+    header.sigma_t_min = fixedShape ? templ->medium.sigma_t_max : kSigmaMin;
+    header.sigma_t_max = fixedShape ? templ->medium.sigma_t_max : kSigmaMax;
+    header.fixed_shape = fixedShape ? 1u : 0u;
     bool ioOk = std::fwrite(&header, sizeof(header), 1, file) == 1;
 
     const auto wallStart = std::chrono::steady_clock::now();
@@ -210,7 +225,7 @@ int cmdDumpTraining(int argc, char** argv) {
         const float* rec = static_cast<const float*>(records[i].contents);
         const float* part = static_cast<const float*>(partials[i].contents);
         for (uint32_t r = 0; r < b.count; ++r) {
-            const float* descriptor = rec + size_t(r) * recordStride;
+            const float* descriptor = rec + size_t(r) * CNR_DUMP_RECORD_STRIDE;
             if (descriptor[dims.n_in] != 1.0f) {
                 ++dropped;
                 continue;
@@ -240,9 +255,9 @@ int cmdDumpTraining(int argc, char** argv) {
         return true;
     };
 
-    for (uint32_t k = 0; k < sceneCount; ++k) {
-        const DumpScene dumpScene = makeDumpScene(*templ, seedBegin, seedEnd, k);
-        const Scene& scene = dumpScene.scene;
+    for (uint32_t k = 0; k < shapeCount; ++k) {
+        const DumpShape shape = makeDumpShape(*templ, shapeBegin, shapeEnd, k, fixedShape);
+        const Scene& scene = shape.scene;
         auto volume = DensityVolume::bake(*context, scene, &error);
         if (!volume) {
             std::fclose(file);
@@ -251,30 +266,29 @@ int cmdDumpTraining(int argc, char** argv) {
         bakeMsTotal += volume->bakeGpuMs();
         const CameraDesc camera = scene.cameras.empty() ? CameraDesc{} : scene.cameras[0];
         const SceneGPU sceneGPU = makeSceneGPU(scene, camera);
-        const double sceneGpuStart = gpuMsTotal;
-        const uint64_t sceneWrittenStart = written;
-        const uint64_t sceneDroppedStart = dropped;
+        const double shapeGpuStart = gpuMsTotal;
+        const uint64_t shapeWrittenStart = written;
+        const uint64_t shapeDroppedStart = dropped;
 
         uint32_t offset = 0;
-        while (offset < recordsPerScene) {
+        while (offset < recordsPerShape) {
             const int set = static_cast<int>(sequence % 2);
             if (batches[set].active && !harvest(set)) {
                 std::fclose(file);
                 return fail(error);
             }
             Batch& b = batches[set];
-            b.count = std::min(batchRecords, recordsPerScene - offset);
+            b.count = std::min(batchRecords, recordsPerShape - offset);
             b.gpuMs = 0.0;
             b.error.clear();
 
             DumpParams dump{};
-            dump.seed = dumpScene.dumpSeed;
+            dump.seed = shape.dumpSeed;
             dump.record_offset = offset;
             dump.record_count = b.count;
             dump.paths = paths;
             dump.paths_per_thread = kPathsPerThread;
             dump.chunks = chunks;
-            dump.shadow_steps = shadowSteps;
             dump.max_tries = kMaxTries;
             uint8_t* slot = static_cast<uint8_t*>(params[set].contents);
             std::memcpy(slot, &sceneGPU, sizeof(SceneGPU));
@@ -310,11 +324,12 @@ int cmdDumpTraining(int argc, char** argv) {
             }
         }
         std::fprintf(stderr,
-                     "dump-training: scene %u/%u density_seed=%u sigma_t_max=%.5f sun_elevation_deg=%.2f "
-                     "records=%llu dropped=%llu gpu_ms=%.1f\n",
-                     k + 1, sceneCount, scene.volume.density_seed, scene.medium.sigma_t_max,
-                     dumpScene.sunElevationDeg, static_cast<unsigned long long>(written - sceneWrittenStart),
-                     static_cast<unsigned long long>(dropped - sceneDroppedStart), gpuMsTotal - sceneGpuStart);
+                     "dump-training: shape %u/%u seed=%u sigma_t_max=%.5f sun_elevation_deg=%.2f records=%llu "
+                     "dropped=%llu gpu_ms=%.1f total_records=%llu\n",
+                     k + 1, shapeCount, shape.shapeSeed, scene.medium.sigma_t_max, shape.sunElevationDeg,
+                     static_cast<unsigned long long>(written - shapeWrittenStart),
+                     static_cast<unsigned long long>(dropped - shapeDroppedStart), gpuMsTotal - shapeGpuStart,
+                     static_cast<unsigned long long>(written));
     }
 
     for (id<MTLAllocation> allocation : resident) context->removeResident(allocation);
@@ -325,15 +340,18 @@ int cmdDumpTraining(int argc, char** argv) {
     ioOk = (std::fclose(file) == 0) && ioOk;
     if (!ioOk) return fail("write error on " + outPath);
 
-    const double wallS =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - wallStart).count();
+    const double wallS = std::chrono::duration<double>(std::chrono::steady_clock::now() - wallStart).count();
     const uint64_t gpuErrors = context->gpuErrorCount();
-    std::printf("{\"out\":%s,\"records\":%llu,\"dropped\":%llu,\"bounce_cap_hits\":%llu,\"scenes\":%u,"
-                "\"seed_begin\":%u,\"seed_end\":%u,\"paths\":%u,\"shadow_steps\":%u,\"gpu_ms\":%.3f,"
-                "\"bake_ms\":%.3f,\"compile_ms\":%.3f,\"wall_s\":%.3f,\"gpu_errors\":%llu}\n",
+    std::printf("{\"out\":%s,\"version\":2,\"records\":%llu,\"dropped\":%llu,\"bounce_cap_hits\":%llu,"
+                "\"shapes\":%u,\"shape_begin\":%u,\"shape_end\":%u,\"fixed_shape_template\":%s,\"records_per_shape\":%u,"
+                "\"paths\":%u,\"hg_g\":%.9g,\"albedo\":%.9g,\"sigma_t_range\":[%.9g,%.9g],"
+                "\"sun_elevation_deg\":[%.9g,%.9g],\"gpu_ms\":%.3f,\"bake_ms\":%.3f,\"compile_ms\":%.3f,"
+                "\"wall_s\":%.3f,\"gpu_errors\":%llu}\n",
                 jsonEscape(outPath).c_str(), static_cast<unsigned long long>(written),
-                static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(capHits), sceneCount,
-                seedBegin, seedEnd, paths, shadowSteps, gpuMsTotal, bakeMsTotal, context->totalCompileMs(), wallS,
+                static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(capHits), shapeCount,
+                shapeBegin, shapeEnd, fixedShape ? jsonEscape(templ->name).c_str() : "null", recordsPerShape, paths,
+                header.hg_g, header.albedo, header.sigma_t_min, header.sigma_t_max, kSunElevationMinDeg,
+                kSunElevationMaxDeg, gpuMsTotal, bakeMsTotal, context->totalCompileMs(), wallS,
                 static_cast<unsigned long long>(gpuErrors));
     return gpuErrors > 0 ? 1 : 0;
 }

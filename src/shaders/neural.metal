@@ -1,15 +1,19 @@
-// Neural renderer (docs/architecture.md §8): the analytic integrator march_view_ray with
-// L_rest from the MLP. Concatenated after neural_common.metal.
+// Neural renderer: the shared march (march_view_ray) with the in-scattered radiance from the MLP.
+// Concatenated after neural_common.metal; compiled once per inference variant (NN_SHADER_ML 0/1).
+// Bindings: buffer 2 = fp32 weights (.cnrm order, biases for both variants); with NN_SHADER_ML,
+// buffer 3 = fp16 [K][N] matrices for matmul2d.
 
-struct NeuralLRest {
+struct NeuralShade {
     texture3d<float> tex;
     constant SceneGPU* s;
-    device const half* weights;
+    constant NeuralStandardization* norm;
+    device const float* w;
+    device half* w16;
 
-    float3 operator()(float3 x, float3 d, float tau_sun) {
-        float in[NN_IN];
-        build_descriptor(tex, *s, x, d, tau_sun, in);
-        float3 f = mlp_eval(weights, in);
+    float3 operator()(float3 x, float3 d) {
+        float desc[CNR_NN_IN];
+        build_descriptor(tex, *s, x, d, desc);
+        float3 f = mlp_eval(w, w16, *norm, desc);
         LightCoeffs c;
         c.sun = f.x;
         c.sky = f.y;
@@ -20,7 +24,10 @@ struct NeuralLRest {
 
 kernel void neural_render(constant SceneGPU& s [[buffer(0)]],
                           constant NeuralParams& p [[buffer(1)]],
-                          device const half* weights [[buffer(2)]],
+                          device const float* weights [[buffer(2)]],
+#if NN_SHADER_ML
+                          device half* weights16 [[buffer(3)]],
+#endif
                           texture3d<float> density [[texture(0)]],
                           texture2d<float, access::write> out [[texture(1)]],
                           uint2 gid [[thread_position_in_grid]]) {
@@ -28,25 +35,41 @@ kernel void neural_render(constant SceneGPU& s [[buffer(0)]],
         return;
     }
     Ray r = camera_ray(s, float2(gid) + 0.5f);
-    NeuralLRest lrest{density, &s, weights};
-    float3 L = march_view_ray(density, s, r, p.primary_steps, p.shadow_steps, lrest);
-    out.write(float4(L, 1.0f), gid);
+    MarchSettings m = make_march_settings(s, p.march, gid);
+    NeuralShade shade;
+    shade.tex = density;
+    shade.s = &s;
+    shade.norm = &p.norm;
+    shade.w = weights;
+#if NN_SHADER_ML
+    shade.w16 = weights16;
+#else
+    shade.w16 = nullptr;
+#endif
+    out.write(march_view_ray(density, s, r, m, shade), gid);
 }
 
-// Batch inference for GPU/PyTorch parity checks: inputs[count][NN_IN] -> outputs[count][3] = f.
+// Batch inference for parity checks: inputs[count][13] (raw descriptors) -> outputs[count][3] = f.
 kernel void neural_eval_batch(constant NeuralEvalParams& p [[buffer(0)]],
-                              device const half* weights [[buffer(1)]],
-                              device const float* inputs [[buffer(2)]],
-                              device float* outputs [[buffer(3)]],
+                              device const float* inputs [[buffer(1)]],
+                              device float* outputs [[buffer(2)]],
+                              device const float* weights [[buffer(3)]],
+#if NN_SHADER_ML
+                              device half* weights16 [[buffer(4)]],
+#endif
                               uint i [[thread_position_in_grid]]) {
     if (i >= p.count) {
         return;
     }
-    float in[NN_IN];
-    for (uint k = 0u; k < uint(NN_IN); ++k) {
-        in[k] = inputs[i * uint(NN_IN) + k];
+    float desc[CNR_NN_IN];
+    for (uint k = 0u; k < uint(CNR_NN_IN); ++k) {
+        desc[k] = inputs[i * uint(CNR_NN_IN) + k];
     }
-    float3 f = mlp_eval(weights, in);
+#if NN_SHADER_ML
+    float3 f = mlp_eval(weights, weights16, p.norm, desc);
+#else
+    float3 f = mlp_eval(weights, nullptr, p.norm, desc);
+#endif
     outputs[i * 3u + 0u] = f.x;
     outputs[i * 3u + 1u] = f.y;
     outputs[i * 3u + 2u] = f.z;

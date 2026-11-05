@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "name": "cumulus",
+  "cameras": [
+    {"name": "front", "position": [0, 120, -2300], "target": [0, 300, 0], "vfov_deg": 22, "exposure_ev": 0.5},
+    {"name": "side", "position": [2300, 120, 0], "target": [0, 300, 0], "vfov_deg": 22, "exposure_ev": 0.5},
+    {"name": "below", "position": [-450, 10, -550], "target": [0, 260, 0], "vfov_deg": 60, "exposure_ev": 0.5}
+  ],
+  "film": {"width": 960, "height": 540},
+  "volume": {
+    "bounds_min": [-500, 0, -500],
+    "bounds_max": [500, 800, 500],
+    "grid": [256, 192, 256],
+    "density": "cumulus",
+    "cloud": {
+      "base_center": [0, 90, 0],
+      "lobes": [
+        [0, 140, 0, 190],
+        [-230, 110, 30, 150],
+        [230, 115, -20, 155],
+        [-60, 120, -190, 140],
+        [70, 125, 190, 140],
+        [-120, 270, -40, 150],
+        [130, 290, 30, 145],
+        [0, 330, 60, 135],
+        [-40, 430, -10, 115],
+        [90, 470, 10, 95],
+        [-150, 400, 70, 90]
+      ],
+      "lobe_blend": 35,
+      "shear": [0.08, 0.02],
+      "anvil_height": 500,
+      "height": 640,
+      "anvil_spread": 60,
+      "radius": 300,
+      "base_softness": 10,
+      "base_fade_height": 50,
+      "erosion_feature_size": 45,
+      "erosion_octaves": 5,
+      "erosion_amplitude": 40,
+      "edge": 12,
+      "seed": 1
+    }
+  },
+  "medium": {"sigma_t_max": 0.05, "albedo": 0.99, "hg_g": 0.8},
+  "light": {
+    "sun_direction": [-0.6124, 0.5, -0.6124],
+    "sun_irradiance": [12, 11.6, 10.8],
+    "sky_radiance": [0.18, 0.3, 0.62],
+    "ground_radiance": [0.08, 0.07, 0.06]
+  }
+}

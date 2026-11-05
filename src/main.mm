@@ -13,6 +13,7 @@
 #include "scene.h"
 #include "training_dump.h"
 #include "suite.h"
+#include "sweep.h"
 #include "viewer.h"
 
 #include <algorithm>
@@ -292,6 +293,7 @@ int main(int argc, char** argv) {
         if (command == "neural-check") return cmdNeuralCheck(argc, argv);
         if (command == "bench") return cmdBench(argc, argv);
         if (command == "suite") return cmdSuite(argc, argv);
+        if (command == "sweep") return cmdSweep(argc, argv);
         printUsage();
         return 1;
     }

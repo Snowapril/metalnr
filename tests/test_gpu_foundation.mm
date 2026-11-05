@@ -1,5 +1,5 @@
-// Milestone 1 GPU integration tests: context, runtime compile, camera rays, density bake and
-// sampling, density renderer. Runs under the Metal debug layer and shader validation.
+// Milestone 1 GPU integration tests: context, runtime compile, camera rays, cumulus and constant
+// density bake and sampling, density renderer. Runs under the Metal debug layer and shader validation.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,21 +24,89 @@ namespace {
 
 const std::vector<std::string> kTestKernels = {"tests/shaders/test_kernels.metal"};
 
+// A fixed four-lobe cumulus in the default 1000 x 800 x 1000 m volume, base 100 m above the floor.
+CloudDesc makeTestCloud(uint32_t seed) {
+    CloudDesc c;
+    c.base_center = simd_make_float3(0, 100, 0);
+    c.lobes = {simd_make_float4(0, 150, 0, 200), simd_make_float4(120, 260, 40, 140),
+               simd_make_float4(-100, 330, -30, 120), simd_make_float4(30, 420, 10, 100)};
+    c.lobe_blend = 40.0f;
+    c.shear = simd_make_float2(0.15f, 0.0f);
+    c.anvil_height = 400.0f;
+    c.height = 520.0f;
+    c.anvil_spread = 80.0f;
+    c.radius = 260.0f;
+    c.base_softness = 15.0f;
+    c.base_fade_height = 60.0f;
+    c.erosion_feature_size = 60.0f;
+    c.erosion_octaves = 4;
+    c.erosion_amplitude = 35.0f;
+    c.edge = 25.0f;
+    c.seed = seed;
+    return c;
+}
+
+// density "cumulus": makeTestCloud(seed) on a 64 x 48 x 64 grid; "constant": 32^3 grid.
 Scene makeTestScene(const std::string& density, uint32_t seed) {
     Scene scene;
+    scene.version = 3;
     scene.name = "test";
     CameraDesc camera;
-    camera.name = "side";
-    camera.position = simd_make_float3(0, 200, -1500);
-    camera.target = simd_make_float3(0, 200, 0);
+    camera.name = "front";
+    camera.position = simd_make_float3(0, 400, -2200);
+    camera.target = simd_make_float3(0, 400, 0);
+    camera.vfov_deg = 35.0f;
     scene.cameras.push_back(camera);
     scene.width = 64;
     scene.height = 36;
-    scene.volume.grid = simd_make_uint3(32, 32, 32);
     scene.volume.density = density;
-    scene.volume.density_seed = seed;
+    if (density == "cumulus") {
+        scene.volume.grid = simd_make_uint3(64, 48, 64);
+        scene.volume.cloud = makeTestCloud(seed);
+    } else {
+        scene.volume.grid = simd_make_uint3(32, 32, 32);
+    }
     scene.light.sun_direction = simd_normalize(scene.light.sun_direction);
     return scene;
+}
+
+float smoothstep01(float e0, float e1, float x) {
+    float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Conservative world AABB where the baked cumulus density can be > 0 (see bake_density.metal): each
+// lobe inflated by (lobes - 1) * lobe_blend / 4 + erosion_amplitude, cut at cloud-local y <= 0, with
+// x = q * s(y) + shear * y bounded over the lobe's y range (s = monotone anvil scale).
+void cloudWorldBounds(const CloudDesc& c, simd_float3* lo, simd_float3* hi) {
+    const float inflate = float(c.lobes.size() - 1) * c.lobe_blend * 0.25f + c.erosion_amplitude;
+    const float inf = std::numeric_limits<float>::infinity();
+    *lo = simd_make_float3(inf, inf, inf);
+    *hi = -*lo;
+    for (simd_float4 l : c.lobes) {
+        const float R = l.w + inflate;
+        const float y0 = std::max(0.0f, l.y - R), y1 = l.y + R;
+        if (y1 <= 0.0f) continue;
+        const float k = c.anvil_spread / c.radius;
+        const float s0 = 1.0f + k * smoothstep01(c.anvil_height, c.height, y0);
+        const float s1 = 1.0f + k * smoothstep01(c.anvil_height, c.height, y1);
+        const float centre[2] = {l.x, l.z};
+        const float shear[2] = {c.shear.x, c.shear.y};
+        float axisLo[2], axisHi[2];
+        for (int a = 0; a < 2; ++a) {
+            const float qlo = centre[a] - R, qhi = centre[a] + R;
+            axisLo[a] = std::min(qlo * s0, qlo * s1) + std::min(shear[a] * y0, shear[a] * y1);
+            axisHi[a] = std::max(qhi * s0, qhi * s1) + std::max(shear[a] * y0, shear[a] * y1);
+        }
+        lo->x = std::min(lo->x, axisLo[0]);
+        hi->x = std::max(hi->x, axisHi[0]);
+        lo->z = std::min(lo->z, axisLo[1]);
+        hi->z = std::max(hi->z, axisHi[1]);
+        lo->y = std::min(lo->y, y0);
+        hi->y = std::max(hi->y, y1);
+    }
+    *lo += c.base_center;
+    *hi += c.base_center;
 }
 
 // Adds allocations to the context residency set for the lifetime of this object.
@@ -150,30 +219,74 @@ bool bakeLevel0(MetalContext& context, const Scene& scene, std::vector<uint16_t>
     return true;
 }
 
-void testBakeDeterminism(MetalContext& context) {
-    const Scene sceneA = makeTestScene("procedural", 1);
-    const Scene sceneB = makeTestScene("procedural", 2);
-    std::vector<uint16_t> first, second, other;
-    const bool ok = bakeLevel0(context, sceneA, &first) && bakeLevel0(context, sceneA, &second) &&
-                    bakeLevel0(context, sceneB, &other);
-    CHECK(ok);
-    if (!ok) return;
+// Checks one baked cumulus level 0 against the field's guarantees: values in [0, 1], a dense core
+// (voxels > 0.5), mostly empty space, exactly 0 outside the conservative bounds and below the base.
+// expectBelowBase: the grid has voxel centres below base_center.y - base_softness.
+void checkCumulusField(const Scene& scene, const std::vector<uint16_t>& voxels, bool expectBelowBase) {
+    const simd_uint3 grid = scene.volume.grid;
+    CHECK(voxels.size() == size_t(grid.x) * grid.y * grid.z);
+    if (voxels.size() != size_t(grid.x) * grid.y * grid.z) return;
+    const CloudDesc& cloud = scene.volume.cloud;
+    simd_float3 lo, hi;
+    cloudWorldBounds(cloud, &lo, &hi);
+    const simd_float3 bmin = scene.volume.bounds_min;
+    const simd_float3 ext = scene.volume.bounds_max - bmin;
 
-    CHECK(first.size() == size_t(32) * 32 * 32);
-    CHECK(first == second);
-    CHECK(first != other);
-
-    bool inRange = true;
-    float maxValue = 0.0f;
-    for (const auto* field : {&first, &other}) {
-        for (uint16_t bits : *field) {
-            const float v = halfToFloat(bits);
-            inRange = inRange && std::isfinite(v) && v >= 0.0f && v <= 1.0f;
-            maxValue = std::max(maxValue, v);
+    bool inRange = true, zeroOutside = true, zeroBelowBase = true, zeroBelowSoftBase = true;
+    size_t dense = 0, empty = 0, outside = 0, belowBase = 0, belowSoftBase = 0;
+    for (uint32_t z = 0; z < grid.z; ++z) {
+        for (uint32_t y = 0; y < grid.y; ++y) {
+            for (uint32_t x = 0; x < grid.x; ++x) {
+                const float v = halfToFloat(voxels[x + size_t(grid.x) * (y + size_t(grid.y) * z)]);
+                const simd_float3 centre =
+                    bmin + (simd_make_float3(float(x), float(y), float(z)) + 0.5f) / simd_float(grid) * ext;
+                inRange = inRange && std::isfinite(v) && v >= 0.0f && v <= 1.0f;
+                dense += v > 0.5f;
+                empty += v == 0.0f;
+                if (simd_any(centre < lo) || simd_any(centre > hi)) {
+                    ++outside;
+                    zeroOutside = zeroOutside && v == 0.0f;
+                }
+                const float localY = centre.y - cloud.base_center.y;
+                if (localY < 0.0f) {
+                    ++belowBase;
+                    zeroBelowBase = zeroBelowBase && v == 0.0f;
+                }
+                if (localY < -cloud.base_softness) {
+                    ++belowSoftBase;
+                    zeroBelowSoftBase = zeroBelowSoftBase && v == 0.0f;
+                }
+            }
         }
     }
     CHECK(inRange);
-    CHECK(maxValue > 0.0f);  // the procedural field must not be empty
+    CHECK(dense > 0);
+    CHECK(empty > voxels.size() / 4);
+    CHECK(outside > 0);
+    CHECK(zeroOutside);
+    if (expectBelowBase) CHECK(belowSoftBase > 0);
+    CHECK(zeroBelowSoftBase);
+    CHECK(belowBase >= belowSoftBase);
+    CHECK(zeroBelowBase);
+}
+
+void testCumulusBake(MetalContext& context) {
+    const Scene sceneA = makeTestScene("cumulus", 1);
+    const Scene sceneB = makeTestScene("cumulus", 2);  // same shape, different erosion seed
+    Scene sceneR = makeTestScene("cumulus", 1);
+    sceneR.volume.cloud = makeRandomCumulus(1500, sceneR.volume);
+    std::vector<uint16_t> first, second, other, generated;
+    const bool ok = bakeLevel0(context, sceneA, &first) && bakeLevel0(context, sceneA, &second) &&
+                    bakeLevel0(context, sceneB, &other) && bakeLevel0(context, sceneR, &generated);
+    CHECK(ok);
+    if (!ok) return;
+
+    CHECK(first == second);
+    CHECK(first != other);
+    CHECK(first != generated);
+    checkCumulusField(sceneA, first, true);
+    checkCumulusField(sceneB, other, true);
+    checkCumulusField(sceneR, generated, false);
 }
 
 void testConstantVolume(MetalContext& context) {
@@ -239,12 +352,17 @@ void testConstantVolume(MetalContext& context) {
 }
 
 void testDensityRenderer(MetalContext& context) {
-    Scene scene = makeTestScene("procedural", 1);
-    RenderConfig config;
-    config.renderer = "density";
-    config.primary_steps = 64;
-
+    Scene scene = makeTestScene("cumulus", 1);
     std::string error;
+    auto loaded = loadRenderConfig(std::string(CLOUDNR_SOURCE_ROOT) + "/configs/density.json", &error);
+    CHECK(loaded.has_value());
+    if (!loaded) return report("load configs/density.json", error);
+    const RenderConfig config = *loaded;
+    CHECK(config.renderer == "density");
+
+    RenderConfig badConfig = config;
+    badConfig.max_steps = 0;
+
     auto volume = DensityVolume::bake(context, scene, &error);
     CHECK(volume != nullptr);
     if (!volume) return report("renderer bake", error);
@@ -259,6 +377,9 @@ void testDensityRenderer(MetalContext& context) {
     std::string unknownError;
     CHECK(makeRenderer(context, scene, unknown, *volume, &unknownError) == nullptr);
     CHECK(unknownError == "renderer 'no_such_renderer' not available");
+    std::string badError;
+    CHECK(makeRenderer(context, scene, badConfig, *volume, &badError) == nullptr);
+    CHECK(badError.find("max_steps") != std::string::npos);
 
     const uint64_t errorsBefore = context.gpuErrorCount();
     const SceneGPU sceneGPU = makeSceneGPU(scene, scene.cameras[0]);
@@ -317,7 +438,7 @@ int main(int argc, char** argv) {
         testContext(*context);
         testRuntimeCompile(*context);
         testCameraCenterRay(*context);
-        testBakeDeterminism(*context);
+        testCumulusBake(*context);
         testConstantVolume(*context);
         testDensityRenderer(*context);
         context->waitIdle();

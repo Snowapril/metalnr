@@ -314,9 +314,9 @@ void testHgSampling(MetalContext& context) {
 // (d) Same seed -> bit-identical image; another seed -> different image.
 void testDeterminism(MetalContext& context) {
     std::string error;
-    auto loaded = loadScene(std::string(CLOUDNR_SOURCE_ROOT) + "/scenes/eval_medium.json", &error);
+    auto loaded = loadScene(std::string(CLOUDNR_SOURCE_ROOT) + "/scenes/cumulus.json", &error);
     CHECK(loaded.has_value());
-    if (!loaded) return report("load eval_medium", error);
+    if (!loaded) return report("load cumulus", error);
     Scene scene = *loaded;
     scene.volume.grid = simd_make_uint3(32, 32, 32);
     scene.width = 64;

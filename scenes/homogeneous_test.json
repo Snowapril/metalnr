@@ -1,74 +1,22 @@
 {
-  "version": 1,
+  "version": 3,
   "name": "homogeneous_test",
   "cameras": [
-    {
-      "name": "front",
-      "position": [
-        0,
-        0,
-        -5
-      ],
-      "target": [
-        0,
-        0,
-        0
-      ],
-      "vfov_deg": 30,
-      "exposure_ev": 0
-    }
+    {"name": "front", "position": [0, 0, -5], "target": [0, 0, 0], "vfov_deg": 30, "exposure_ev": 0}
   ],
-  "film": {
-    "width": 128,
-    "height": 128
-  },
+  "film": {"width": 128, "height": 128},
   "volume": {
-    "bounds_min": [
-      -1,
-      -1,
-      -1
-    ],
-    "bounds_max": [
-      1,
-      1,
-      1
-    ],
-    "grid": [
-      16,
-      16,
-      16
-    ],
+    "bounds_min": [-1, -1, -1],
+    "bounds_max": [1, 1, 1],
+    "grid": [16, 16, 16],
     "density": "constant",
-    "density_seed": 1,
-    "coverage": 0.5,
-    "erosion": 0.3,
     "constant_density": 1.0
   },
-  "medium": {
-    "sigma_t_max": 1.0,
-    "albedo": 0.5,
-    "hg_g": 0.0
-  },
+  "medium": {"sigma_t_max": 1.0, "albedo": 0.5, "hg_g": 0.0},
   "light": {
-    "sun_direction": [
-      0,
-      1,
-      0
-    ],
-    "sun_irradiance": [
-      1,
-      1,
-      1
-    ],
-    "sky_radiance": [
-      1,
-      1,
-      1
-    ],
-    "ground_radiance": [
-      1,
-      1,
-      1
-    ]
+    "sun_direction": [0, 1, 0],
+    "sun_irradiance": [1, 1, 1],
+    "sky_radiance": [1, 1, 1],
+    "ground_radiance": [1, 1, 1]
   }
 }

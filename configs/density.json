@@ -1,4 +1,8 @@
 {
   "renderer": "density",
-  "primary_steps": 128
+  "step_scale": 1.0,
+  "max_steps": 512,
+  "min_transmittance": 0.01,
+  "dither": true,
+  "empty_skip": true
 }

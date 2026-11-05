@@ -25,8 +25,8 @@ public:
 
     bool init(MetalContext& context, const Scene& scene, const RenderConfig& config,
               const DensityVolume& density, std::string* error) {
-        if (config.primary_steps == 0) {
-            if (error) *error = "density renderer: primary_steps must be > 0";
+        if (!(config.step_scale > 0.0f) || config.max_steps == 0) {
+            if (error) *error = "density renderer: step_scale and max_steps must be > 0";
             return false;
         }
         context_ = &context;
@@ -53,7 +53,7 @@ public:
         uniforms_.label = @"density_view uniforms";
         output_.label = @"density_view output";
 
-        view_.steps = config.primary_steps;
+        view_.march = makeMarchParams(config);
         [table_ setTexture:density.texture().gpuResourceID atIndex:0];
         [table_ setTexture:output_.gpuResourceID atIndex:1];
 

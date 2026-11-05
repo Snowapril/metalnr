@@ -1,13 +1,15 @@
-// Training-target generation for the neural L_rest (docs/architecture.md §8).
+// Training-target generation for the neural shader (the article's camera-style sampling).
 // Concatenated after neural_common.metal.
 //
-// Record r of a scene: rng stream (seed, r, 0) rejection-samples x uniformly in the AABB
-// until density > 0.01 (max_tries attempts; otherwise the record is invalid), then draws a
-// uniform view direction d. Target f = mean over `paths` of random_walk from x along
-// w ~ HG(d, g) with unit sources: the full in-scattered radiance at x toward -d minus the
-// direct sun term (no sun NEE at x itself), i.e. exactly L_rest in coefficient form.
-// Each record is split over `chunks` threads (path rng stream (seed, r, 1 + chunk)) to
-// bound per-thread work; every thread recomputes x and d from the record stream.
+// Record r of a shape: rng stream (seed, r, 0) shoots camera rays from a uniform point on the
+// AABB's bounding sphere toward a uniform point inside the AABB and delta-tracks each to its FIRST
+// real collision x (at most max_tries rays; otherwise the record is invalid and dropped on the
+// host); d = that ray's direction. Target f = mean over `paths` of
+//   hg(dot(sun, d), g) * T_sun(x)            (sun single scattering, ratio tracking)
+//   + random_walk(Ray(x, w ~ HG(d, g))).L     (everything that arrives at x from w)
+// with unit sources: the full in-scattered radiance at x toward -d (pre-albedo), the function the
+// network learns. Each record is split over `chunks` threads (path rng stream (seed, r, 1 + chunk));
+// every thread recomputes x and d from the record stream.
 
 kernel void neural_dump(constant SceneGPU& s [[buffer(0)]],
                         constant DumpParams& p [[buffer(1)]],
@@ -21,27 +23,43 @@ kernel void neural_dump(constant SceneGPU& s [[buffer(0)]],
         return;
     }
     uint record = p.record_offset + local;
-    device float* rec = records + local * (uint(NN_IN) + 1u);
+    device float* rec = records + local * CNR_DUMP_RECORD_STRIDE;
     device float* part = partials + tid * CNR_DUMP_PARTIAL_STRIDE;
 
+    float3 extent = s.bounds_max - s.bounds_min;
+    float3 center = 0.5f * (s.bounds_min + s.bounds_max);
+    float radius = 0.5f * length(extent);
     Rng rng = rng_init(p.seed, record, 0u);
     float3 x = float3(0.0f);
+    float3 d = float3(0.0f, 0.0f, 1.0f);
     bool found = false;
-    float3 extent = s.bounds_max - s.bounds_min;
-    for (uint k = 0u; k < p.max_tries; ++k) {
+    for (uint k = 0u; k < p.max_tries && !found; ++k) {
         float u0 = rng_float(rng);
         float u1 = rng_float(rng);
         float u2 = rng_float(rng);
-        float3 c = s.bounds_min + float3(u0, u1, u2) * extent;
-        if (density_at(density, s, c) > 0.01f) {
-            x = c;
+        float u3 = rng_float(rng);
+        float u4 = rng_float(rng);
+        float cz = 1.0f - 2.0f * u0;
+        float sz = sqrt(max(0.0f, 1.0f - cz * cz));
+        float phi = 2.0f * kPi * u1;
+        Ray r;
+        r.o = center + radius * float3(sz * cos(phi), sz * sin(phi), cz);
+        float3 target = s.bounds_min + float3(u2, u3, u4) * extent;
+        float3 dir = target - r.o;
+        if (length_squared(dir) <= 0.0f) {
+            continue;
+        }
+        r.d = normalize(dir);
+        float t0, t1, t;
+        if (intersect_aabb(r, s.bounds_min, s.bounds_max, t0, t1) && delta_track(density, s, r, t0, t1, rng, t)) {
+            x = r.o + t * r.d;
+            d = r.d;
             found = true;
-            break;
         }
     }
     if (!found) {
         if (chunk == 0u) {
-            for (uint k = 0u; k <= uint(NN_IN); ++k) {
+            for (uint k = 0u; k < CNR_DUMP_RECORD_STRIDE; ++k) {
                 rec[k] = 0.0f;
             }
         }
@@ -51,23 +69,16 @@ kernel void neural_dump(constant SceneGPU& s [[buffer(0)]],
         return;
     }
 
-    float v0 = rng_float(rng);
-    float v1 = rng_float(rng);
-    float cz = 1.0f - 2.0f * v0;
-    float sz = sqrt(max(0.0f, 1.0f - cz * cz));
-    float phi = 2.0f * kPi * v1;
-    float3 d = float3(sz * cos(phi), sz * sin(phi), cz);
-
     if (chunk == 0u) {
-        float tau_sun = march_optical_depth(density, s, x, s.sun_direction, p.shadow_steps);
-        float in[NN_IN];
-        build_descriptor(density, s, x, d, tau_sun, in);
-        for (uint k = 0u; k < uint(NN_IN); ++k) {
-            rec[k] = in[k];
+        float desc[CNR_NN_IN];
+        build_descriptor(density, s, x, d, desc);
+        for (uint k = 0u; k < uint(CNR_NN_IN); ++k) {
+            rec[k] = desc[k];
         }
-        rec[NN_IN] = 1.0f;
+        rec[CNR_NN_IN] = 1.0f;
     }
 
+    float phase_sun = hg_eval(dot(s.sun_direction, d), s.hg_g);
     uint begin = chunk * p.paths_per_thread;
     uint end = min(begin + p.paths_per_thread, p.paths);
     Rng prng = rng_init(p.seed, record, 1u + chunk);
@@ -76,6 +87,8 @@ kernel void neural_dump(constant SceneGPU& s [[buffer(0)]],
     float ground = 0.0f;
     uint cap_hits = 0u;
     for (uint i = begin; i < end; ++i) {
+        sun += phase_sun * ratio_tracking_transmittance(density, s, x, s.sun_direction, prng);
+        // Draw explicitly in order: argument evaluation order is unspecified.
         float u0 = rng_float(prng);
         float u1 = rng_float(prng);
         Ray r;

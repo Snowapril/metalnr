@@ -1,0 +1,24 @@
+{
+  "version": 3,
+  "name": "cumulus_heldout",
+  "cameras": [
+    {"name": "front", "position": [0, 400, -2200], "target": [0, 400, 0], "vfov_deg": 28, "exposure_ev": 0},
+    {"name": "side", "position": [2200, 400, 0], "target": [0, 400, 0], "vfov_deg": 28, "exposure_ev": 0},
+    {"name": "below", "position": [-450, 10, -550], "target": [0, 260, 0], "vfov_deg": 60, "exposure_ev": 0}
+  ],
+  "film": {"width": 960, "height": 540},
+  "volume": {
+    "bounds_min": [-500, 0, -500],
+    "bounds_max": [500, 800, 500],
+    "grid": [256, 192, 256],
+    "density": "cumulus",
+    "cloud": {"generator_seed": 2500}
+  },
+  "medium": {"sigma_t_max": 0.05, "albedo": 0.99, "hg_g": 0.8},
+  "light": {
+    "sun_direction": [-0.6124, 0.5, -0.6124],
+    "sun_irradiance": [8, 8, 8],
+    "sky_radiance": [0.35, 0.5, 0.8],
+    "ground_radiance": [0.12, 0.11, 0.1]
+  }
+}

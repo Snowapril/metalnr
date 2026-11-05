@@ -25,8 +25,12 @@ public:
 
     bool init(MetalContext& context, const Scene& scene, const RenderConfig& config,
               const DensityVolume& density, std::string* error) {
-        if (config.primary_steps == 0 || config.shadow_steps == 0) {
-            if (error) *error = "analytic renderer: primary_steps and shadow_steps must be > 0";
+        if (config.step_scale <= 0.0f || config.max_steps == 0) {
+            if (error) *error = "analytic renderer: step_scale and max_steps must be > 0";
+            return false;
+        }
+        if (config.shadow_steps == 0) {
+            if (error) *error = "analytic renderer: shadow_steps must be > 0";
             return false;
         }
         if (config.octaves == 0) {
@@ -61,14 +65,15 @@ public:
         uniforms_.label = @"analytic uniforms";
         output_.label = @"analytic output";
 
-        params_.primary_steps = config.primary_steps;
+        params_.march = makeMarchParams(config);
         params_.shadow_steps = config.shadow_steps;
         params_.ambient_steps = config.ambient_steps;
         params_.octaves = config.octaves;
+        params_.flags = config.ambient ? CNR_ANALYTIC_AMBIENT : 0u;
         params_.ms_a = config.ms_a;
         params_.ms_b = config.ms_b;
         params_.ms_c = config.ms_c;
-        params_.flags = config.ambient ? CNR_ANALYTIC_AMBIENT : 0u;
+        params_.shadow_distance = config.shadow_distance;
 
         [table_ setTexture:density.texture().gpuResourceID atIndex:0];
         [table_ setTexture:output_.gpuResourceID atIndex:1];

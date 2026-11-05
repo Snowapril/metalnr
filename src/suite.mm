@@ -181,9 +181,11 @@ std::string csvHeader() {
 
 std::string qualityLabel(const RenderConfig& c, const BenchResult& r) {
     if (c.renderer == "pt") return std::to_string(r.quality_spp) + " spp";
-    std::string q = std::to_string(c.primary_steps) + "/" + std::to_string(c.shadow_steps) + " steps";
+    std::string q = "step " + fmt(c.step_scale, "%.3g") + "x";
     if (c.renderer == "analytic")
         q += ", " + std::to_string(c.octaves) + " oct" + (c.ambient ? ", ambient" : "");
+    else if (c.renderer == "neural")
+        q += ", " + c.inference;
     return q;
 }
 
@@ -499,8 +501,8 @@ int cmdSuite(int argc, char** argv) {
           " (hits listed per reference); low-spp pt methods carry Monte Carlo noise, not bias.\n"
           "- analytic: ray-march discretization, two-direction ambient term, octave multiple-scattering "
           "approximation (not energy-conserving).\n"
-          "- neural: ray-march discretization, Monte Carlo noise in training targets (log-space loss bias), fp16 "
-          "weights.\n";
+          "- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte Carlo "
+          "noise in training targets; shader_ml uses fp16 activations and weights.\n";
     for (const CaseResult& c : cases) {
         for (const MethodRun& m : c.methods) {
             if (!m.result.has_model) continue;
@@ -508,11 +510,11 @@ int cmdSuite(int argc, char** argv) {
             NSData* data = [NSData dataWithContentsOfFile:ns(sidecar)];
             NSDictionary* side = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
             md += "\n## Neural model\n\n- `" + m.result.model_path + "` sha256 `" + m.result.model_sha256 +
-                  "`, format " + std::to_string(m.result.model_format_version) + "\n- training density seeds " +
+                  "`, format " + std::to_string(m.result.model_format_version) + "\n- training shape seeds " +
                   std::to_string(m.result.model_train_seed_first) + "-" +
-                  std::to_string(m.result.model_train_seed_last) + " (evaluation scenes use seeds 1-999)\n";
+                  std::to_string(m.result.model_train_seed_last) + "\n";
             if ([side[@"best_val_loss"] isKindOfClass:[NSNumber class]])
-                md += "- best validation loss (MSE on log1p f) " + fmt([side[@"best_val_loss"] doubleValue]) +
+                md += "- best validation loss (MSE on raw targets) " + fmt([side[@"best_val_loss"] doubleValue]) +
                       ", validation seeds " + fmt([side[@"val_seed_range"][0] doubleValue], "%.0f") + "-" +
                       fmt([side[@"val_seed_range"][1] doubleValue], "%.0f") + "\n";
             break;

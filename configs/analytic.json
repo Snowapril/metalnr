@@ -1,11 +1,16 @@
 {
   "renderer": "analytic",
-  "primary_steps": 128,
-  "shadow_steps": 16,
+  "step_scale": 1,
+  "max_steps": 512,
+  "min_transmittance": 0.01,
+  "dither": true,
+  "empty_skip": true,
+  "shadow_steps": 6,
+  "shadow_distance": 0,
   "ambient_steps": 4,
-  "octaves": 4,
-  "ms_a": 0.5,
-  "ms_b": 0.5,
-  "ms_c": 0.5,
+  "octaves": 3,
+  "ms_a": 0.4,
+  "ms_b": 0.35,
+  "ms_c": 0.1,
   "ambient": true
 }

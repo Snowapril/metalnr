@@ -12,15 +12,24 @@ kernel void test_optical_depth(constant SceneGPU& s [[buffer(0)]],
     out[gid] = march_optical_depth(density, s, o.xyz, d.xyz, uint(o.w));
 }
 
-struct ZeroLRest {
-    float3 operator()(float3, float3, float) { return float3(0.0f); }
+// Exact single scattering of the sun: Ls = p(cos) exp(-tau_sun) E_sun with the AABB-exit optical depth.
+struct SunShade {
+    texture3d<float> tex;
+    constant SceneGPU* s;
+    uint shadow_steps;
+
+    float3 operator()(float3 x, float3 d) {
+        float tau = march_optical_depth(tex, *s, x, s->sun_direction, shadow_steps);
+        return hg_eval(dot(s->sun_direction, d), s->hg_g) * precise::exp(-tau) * s->sun_irradiance;
+    }
 };
 
-// rays[2i] = (origin, primary_steps), rays[2i+1] = (unit direction, shadow_steps);
-// out[i] = march_view_ray with L_rest = 0 (single scattering of the sun only).
+// rays[2i] = (origin, jitter in (0, 1]), rays[2i+1] = (unit direction, shadow_steps);
+// out[i] = march_view_ray with SunShade, settings from make_march_settings(p) and the jitter overridden.
 kernel void test_march_single_scatter(constant SceneGPU& s [[buffer(0)]],
-                                      device const float4* rays [[buffer(1)]],
-                                      device float4* out [[buffer(2)]],
+                                      constant MarchParams& p [[buffer(1)]],
+                                      device const float4* rays [[buffer(2)]],
+                                      device float4* out [[buffer(3)]],
                                       texture3d<float> density [[texture(0)]],
                                       uint gid [[thread_position_in_grid]]) {
     float4 o = rays[2u * gid];
@@ -28,8 +37,22 @@ kernel void test_march_single_scatter(constant SceneGPU& s [[buffer(0)]],
     Ray r;
     r.o = o.xyz;
     r.d = d.xyz;
-    ZeroLRest lrest;
-    out[gid] = float4(march_view_ray(density, s, r, uint(o.w), uint(d.w), lrest), 0.0f);
+    MarchSettings m = make_march_settings(s, p, uint2(gid, 0u));
+    m.jitter = o.w;
+    SunShade shade;
+    shade.tex = density;
+    shade.s = &s;
+    shade.shadow_steps = uint(d.w);
+    out[gid] = march_view_ray(density, s, r, m, shade);
+}
+
+// out[i] = (jitter, step) of make_march_settings(p) for pixel (i % width, i / width).
+kernel void test_march_settings(constant SceneGPU& s [[buffer(0)]],
+                                constant MarchParams& p [[buffer(1)]],
+                                device float2* out [[buffer(2)]],
+                                uint gid [[thread_position_in_grid]]) {
+    MarchSettings m = make_march_settings(s, p, uint2(gid % s.width, gid / s.width));
+    out[gid] = float2(m.jitter, m.step);
 }
 
 // Midpoint quadrature of hg_eval over cos in [-1, 1] with grid.x * 64 samples; thread (x, y)

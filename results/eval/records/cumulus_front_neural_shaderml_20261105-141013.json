@@ -1,0 +1,113 @@
+{
+  "bias" : {
+    "notes" : "march discretization; network approximation of in-scattering; Monte Carlo noise in training targets; fp16 activations and weights in matmul2d"
+  },
+  "camera" : "front",
+  "config" : {
+    "dither" : true,
+    "empty_skip" : true,
+    "inference" : "shader_ml",
+    "max_steps" : 512,
+    "min_transmittance" : 0.01,
+    "model" : "models\/cumulus_net.cnrm",
+    "renderer" : "neural",
+    "step_scale" : 1
+  },
+  "config_path" : "configs\/neural_shaderml.json",
+  "cpu_prep_ms" : {
+    "median" : 0.078792000000000001,
+    "p5" : 0.024792000000000002,
+    "p95" : 0.12779099999999999,
+    "runs" : [
+      {
+        "median" : 0.078792000000000001,
+        "p5" : 0.022957999999999999,
+        "p95" : 0.12779099999999999
+      },
+      {
+        "median" : 0.079625000000000001,
+        "p5" : 0.024792000000000002,
+        "p95" : 0.15475
+      },
+      {
+        "median" : 0.077707999999999999,
+        "p5" : 0.025250000000000002,
+        "p95" : 0.122042
+      }
+    ]
+  },
+  "equal_quality_pt_spp" : 512,
+  "excluded_costs_ms" : {
+    "bake" : 28.205375012475997,
+    "compile" : 1.2190000000000003,
+    "model_load" : 1.296208
+  },
+  "gpu_ms" : {
+    "median" : 34.777999971993268,
+    "p5" : 14.434416661970317,
+    "p95" : 46.685000008437783,
+    "runs" : [
+      {
+        "median" : 34.713500004727393,
+        "p5" : 14.246958307921886,
+        "p95" : 46.685000008437783
+      },
+      {
+        "median" : 34.952458343468606,
+        "p5" : 14.647874981164932,
+        "p95" : 45.61012500198558
+      },
+      {
+        "median" : 34.777999971993268,
+        "p5" : 14.434416661970317,
+        "p95" : 47.159999958239496
+      }
+    ]
+  },
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 37748736,
+    "device_delta" : 8355840,
+    "renderer" : 8360204
+  },
+  "metrics" : {
+    "psnr" : 34.361083435793461,
+    "relMSE" : 0.012465122157262707,
+    "ssim" : 0.99530701370537655
+  },
+  "model" : {
+    "format_version" : 2,
+    "path" : "models\/cumulus_net.cnrm",
+    "sha256" : "62915273e567e2ffc83ed0f9f50b21c46eaf94ece30ac3d534f6da70f48ebb2d",
+    "train_seed_range" : [
+      1000,
+      1999
+    ]
+  },
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 5.5256924599999998e-05,
+  "reference_id" : "results\/refs\/cumulus_front\/ref.json",
+  "reference_spp_per_half" : 32768,
+  "renderer" : "neural",
+  "renderer_version" : "ad6fd7e-dirty",
+  "scene" : "cumulus",
+  "scene_version" : 3,
+  "seed" : null,
+  "spp_or_quality" : {
+    "dither" : true,
+    "empty_skip" : true,
+    "inference" : "shader_ml",
+    "max_steps" : 512,
+    "min_transmittance" : 0.0099999997764825821,
+    "step_scale" : 1
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

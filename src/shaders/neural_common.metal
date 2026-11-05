@@ -1,97 +1,147 @@
-// Neural L_rest: descriptor and MLP inference (docs/architecture.md §8). Concatenated after
-// src/shared_types.h, src/shaders/common.metal and src/neural_types.h; the host injects
-// NN_IN, NN_HIDDEN, NN_HIDDEN_LAYERS, NN_OUT, NN_LEVELS as #defines from the model header.
+// The article's neural shader: descriptor and MLP inference. Concatenated after src/shared_types.h,
+// src/shaders/common.metal and src/neural_types.h. The host injects NN_IN, NN_HIDDEN,
+// NN_HIDDEN_LAYERS, NN_OUT (from the model header) and NN_SHADER_ML (0 = hand-written scalar MSL,
+// 1 = Metal 4 Shader ML matmul2d) as #defines.
 //
-// Function approximated by the MLP:
-//   L_rest(x, d) = f_sun E_sun + f_sky L_sky + f_gnd L_gnd
-// the in-scattered radiance at medium point x toward -d (d = tracing/view direction),
-// EXCLUDING the direct single-scattered sun term p(sun -> d) T_sun E_sun, which
-// march_view_ray adds itself. f = (f_sun, f_sky, f_gnd) are scalars (grey medium), the
-// radiance for unit sources. Albedo at x is applied by the integrator, not by f.
+// Function approximated by the MLP (the one line of the march the network replaces):
+//   Ls(x, d) = f_sun E_sun + f_sky L_sky + f_gnd L_gnd
+// the FULL in-scattered radiance at medium point x toward -d (d = view/tracing direction),
+// pre-albedo, including the single-scattered sun. Grey medium, so f = (f_sun, f_sky, f_gnd) are
+// scalars: the radiance for unit sources. The march applies albedo and extinction.
 
-#if !defined(NN_IN) || !defined(NN_HIDDEN) || !defined(NN_HIDDEN_LAYERS) || !defined(NN_OUT) || !defined(NN_LEVELS)
-#error "NN_* dimensions must be injected by the host"
+#if !defined(NN_IN) || !defined(NN_HIDDEN) || !defined(NN_HIDDEN_LAYERS) || !defined(NN_OUT) || !defined(NN_SHADER_ML)
+#error "NN_* dimensions and NN_SHADER_ML must be injected by the host"
 #endif
-#if NN_IN != 7 * NN_LEVELS + 5
-#error "NN_IN must equal 7 * NN_LEVELS + 5 (descriptor layout)"
-#endif
-#if NN_OUT != 3 || NN_HIDDEN_LAYERS < 1
-#error "unsupported MLP shape"
+#if NN_IN != CNR_NN_IN || NN_HIDDEN != CNR_NN_HIDDEN || NN_HIDDEN_LAYERS != CNR_NN_HIDDEN_LAYERS || NN_OUT != CNR_NN_OUT
+#error "unsupported MLP shape (expected 13 -> 16 -> 16 -> 3)"
 #endif
 
-// Descriptor (NN_IN floats):
-//   [0, 7*NN_LEVELS): for level l, h_l = voxel_min_extent * 2^l, mip lod l, points
-//     x + h_l * {0, +X, -X, +Y, -Y, +Z, -Z} in the local frame: log(1 + sigma_t_max * d * h_l)
-//   then cos(view, sun), world +Y in the local frame (3), T_sun = exp(-tau_sun).
-// Local frame: Z = sun_direction, X = d projected perpendicular to Z (world X projected if
-// d is parallel to the sun), Y = cross(Z, X).
-inline void build_descriptor(texture3d<float> tex, constant SceneGPU& s, float3 x, float3 d, float tau_sun,
-                             thread float* out) {
-    float3 az = s.sun_direction;
-    float3 ax = d - dot(d, az) * az;
-    if (length_squared(ax) < 1e-8f) {
-        ax = float3(1.0f, 0.0f, 0.0f) - az.x * az;
-        if (length_squared(ax) < 1e-8f) {
-            ax = float3(0.0f, 0.0f, 1.0f) - az.z * az;  // sun along world X
-        }
+constant float kNNRadii[CNR_NN_RADII] = {6.0f, 12.0f, 24.0f, 48.0f, 96.0f, 192.0f};
+
+// Descriptor (13 floats). For each radius r (m): lod = log2(r / voxel_min_extent) clamped to the
+// mip chain; [0:6) local sigma_t = sigma_t_max * density_at(x, lod), [6:12) toward the sun
+// sigma_t_max * density_at(x + r * sun_direction, lod), [12] = dot(d, sun_direction).
+// Shared by inference and training-data generation.
+inline void build_descriptor(texture3d<float> tex, constant SceneGPU& s, float3 x, float3 d, thread float* out) {
+    float max_lod = float(max(s.mip_levels, 1u) - 1u);
+    for (uint i = 0u; i < uint(CNR_NN_RADII); ++i) {
+        float r = kNNRadii[i];
+        float lod = clamp(log2(r / s.voxel_min_extent), 0.0f, max_lod);
+        out[i] = s.sigma_t_max * density_at(tex, s, x, lod);
+        out[CNR_NN_RADII + i] = s.sigma_t_max * density_at(tex, s, x + r * s.sun_direction, lod);
     }
-    ax = normalize(ax);
-    float3 ay = cross(az, ax);
-
-    uint k = 0u;
-    for (uint l = 0u; l < uint(NN_LEVELS); ++l) {
-        float h = s.voxel_min_extent * float(1u << l);
-        float lod = float(l);
-        float scale = s.sigma_t_max * h;
-        float3 offsets[7] = {float3(0.0f), ax, -ax, ay, -ay, az, -az};
-        for (uint j = 0u; j < 7u; ++j) {
-            out[k++] = log(1.0f + scale * density_at(tex, s, x + h * offsets[j], lod));
-        }
-    }
-    out[k++] = dot(d, az);
-    out[k++] = ax.y;  // world +Y = (0,1,0) expressed in (ax, ay, az)
-    out[k++] = ay.y;
-    out[k++] = az.y;
-    out[k] = precise::exp(-tau_sun);
+    out[2 * CNR_NN_RADII] = dot(d, s.sun_direction);
 }
 
-// expm1 for y >= 0 without cancellation near 0 (MSL has no expm1).
-inline float nn_expm1(float y) {
-    if (y < 0.1f) {
-        return y * (1.0f + y * (0.5f + y * (1.0f / 6.0f + y * (1.0f / 24.0f + y * (1.0f / 120.0f)))));
-    }
-    return precise::exp(y) - 1.0f;
+// Squared ReLU (the article's hidden activation).
+inline float nn_act(float a) {
+    float r = max(a, 0.0f);
+    return r * r;
 }
 
-// One dense layer: W[NO][NI] row-major, then bias[NO]; half weights, float accumulation.
-template <uint NI, uint NO, bool RELU>
-inline void nn_layer(device const half* w, thread const float* in, thread float* out) {
-    device const half* bias = w + NO * NI;
-    for (uint o = 0u; o < NO; ++o) {
-        device const half* row = w + o * NI;
-        float acc = float(bias[o]);
-        for (uint i = 0u; i < NI; ++i) {
-            acc = fma(float(row[i]), in[i], acc);
+// Squared output, clamped to the model's per-output maximum.
+inline float3 nn_output(float y0, float y1, float y2, constant NeuralStandardization& n) {
+    return float3(min(y0 * y0, n.clamp[0]), min(y1 * y1, n.clamp[1]), min(y2 * y2, n.clamp[2]));
+}
+
+// Dense layer y = b + W x, W[NO][NI] row-major (out, in), fp32.
+template <int NI, int NO>
+inline void nn_dense(device const float* w, device const float* b, thread const float* x, thread float* y) {
+#pragma unroll
+    for (int o = 0; o < NO; ++o) {
+        float acc = b[o];
+#pragma unroll
+        for (int i = 0; i < NI; ++i) {
+            acc = fma(w[o * NI + i], x[i], acc);
         }
-        out[o] = RELU ? max(acc, 0.0f) : acc;
+        y[o] = acc;
     }
 }
 
-// MLP NN_IN -> NN_HIDDEN (x NN_HIDDEN_LAYERS, ReLU) -> NN_OUT; returns f = expm1(max(y, 0)).
-inline float3 mlp_eval(device const half* weights, thread const float* in) {
-    float a[NN_HIDDEN];
-    float b[NN_HIDDEN];
-    device const half* w = weights;
-    nn_layer<NN_IN, NN_HIDDEN, true>(w, in, a);
-    w += NN_HIDDEN * NN_IN + NN_HIDDEN;
-    for (uint layer = 1u; layer < uint(NN_HIDDEN_LAYERS); ++layer) {
-        nn_layer<NN_HIDDEN, NN_HIDDEN, true>(w, a, b);
-        for (uint i = 0u; i < uint(NN_HIDDEN); ++i) {
-            a[i] = b[i];
-        }
-        w += NN_HIDDEN * NN_HIDDEN + NN_HIDDEN;
+// Hand-written MSL inference (the article's baseline): fp32 weights in .cnrm order, fp32 math.
+inline float3 mlp_eval_scalar(device const float* w, constant NeuralStandardization& n, thread const float* desc) {
+    float x[CNR_NN_IN];
+#pragma unroll
+    for (int i = 0; i < CNR_NN_IN; ++i) {
+        x[i] = (desc[i] - n.mean[i]) * n.scale[i];
     }
-    float y[NN_OUT];
-    nn_layer<NN_HIDDEN, NN_OUT, false>(w, a, y);
-    return float3(nn_expm1(max(y[0], 0.0f)), nn_expm1(max(y[1], 0.0f)), nn_expm1(max(y[2], 0.0f)));
+    float a[CNR_NN_HIDDEN];
+    float b[CNR_NN_HIDDEN];
+    nn_dense<CNR_NN_IN, CNR_NN_HIDDEN>(w + CNR_NN_W0, w + CNR_NN_B0, x, a);
+#pragma unroll
+    for (int i = 0; i < CNR_NN_HIDDEN; ++i) {
+        a[i] = nn_act(a[i]);
+    }
+    nn_dense<CNR_NN_HIDDEN, CNR_NN_HIDDEN>(w + CNR_NN_W1, w + CNR_NN_B1, a, b);
+#pragma unroll
+    for (int i = 0; i < CNR_NN_HIDDEN; ++i) {
+        b[i] = nn_act(b[i]);
+    }
+    float y[CNR_NN_OUT];
+    nn_dense<CNR_NN_HIDDEN, CNR_NN_OUT>(w + CNR_NN_W2, w + CNR_NN_B2, b, y);
+    return nn_output(y[0], y[1], y[2], n);
+}
+
+#if NN_SHADER_ML
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+
+// y[N] = x[K] W, W stored [K][N] row-major (N contiguous) as device half; one thread runs the whole
+// product (execution_thread). float activations x half weights -> float (a supported matmul2d
+// combination); fp32 activations keep the input/hidden values unrounded, so only the weights are fp16.
+// The destination accumulates, so it is zeroed.
+template <int K, int N>
+inline void nn_matmul_ml(device half* w, thread float* x, thread float* y) {
+#pragma unroll
+    for (int i = 0; i < N; ++i) {
+        y[i] = 0.0f;
+    }
+    auto tx = tensor<thread float, extents<int32_t, K, 1>, tensor_inline>(x, extents<int32_t, K, 1>());
+    auto tw = tensor<device half, extents<int32_t, N, K>, tensor_inline>(w, extents<int32_t, N, K>());
+    auto ty = tensor<thread float, extents<int32_t, N, 1>, tensor_inline>(y, extents<int32_t, N, 1>());
+    constexpr auto desc = mpp::tensor_ops::matmul2d_descriptor(1, N, K, false, false, false);
+    mpp::tensor_ops::matmul2d<desc, execution_thread> op;
+    op.run(tx, tw, ty);
+}
+
+// Metal 4 Shader ML inference: matmul2d with fp32 activations and fp16 weights ([K][N] padded layout
+// at CNR_NN_ML_*), fp32 accumulation; biases (fp32, from the scalar buffer) and activations are applied
+// in registers.
+inline float3 mlp_eval_shader_ml(device half* w16, device const float* w, constant NeuralStandardization& n,
+                                 thread const float* desc) {
+    float x[CNR_NN_IN_PAD];
+#pragma unroll
+    for (int i = 0; i < CNR_NN_IN; ++i) {
+        x[i] = (desc[i] - n.mean[i]) * n.scale[i];
+    }
+#pragma unroll
+    for (int i = CNR_NN_IN; i < CNR_NN_IN_PAD; ++i) {
+        x[i] = 0.0f;
+    }
+    float acc[CNR_NN_HIDDEN];
+    float h[CNR_NN_HIDDEN];
+    nn_matmul_ml<CNR_NN_IN_PAD, CNR_NN_HIDDEN>(w16 + CNR_NN_ML_W0, x, acc);
+#pragma unroll
+    for (int i = 0; i < CNR_NN_HIDDEN; ++i) {
+        h[i] = nn_act(acc[i] + w[CNR_NN_B0 + i]);
+    }
+    nn_matmul_ml<CNR_NN_HIDDEN, CNR_NN_HIDDEN>(w16 + CNR_NN_ML_W1, h, acc);
+#pragma unroll
+    for (int i = 0; i < CNR_NN_HIDDEN; ++i) {
+        h[i] = nn_act(acc[i] + w[CNR_NN_B1 + i]);
+    }
+    float y[CNR_NN_OUT_PAD];
+    nn_matmul_ml<CNR_NN_HIDDEN, CNR_NN_OUT_PAD>(w16 + CNR_NN_ML_W2, h, y);
+    return nn_output(y[0] + w[CNR_NN_B2 + 0], y[1] + w[CNR_NN_B2 + 1], y[2] + w[CNR_NN_B2 + 2], n);
+}
+#endif
+
+// The variant selected at compile time. w16 is unused (and may be null) by the scalar variant.
+inline float3 mlp_eval(device const float* w, device half* w16, constant NeuralStandardization& n,
+                       thread const float* desc) {
+#if NN_SHADER_ML
+    return mlp_eval_shader_ml(w16, w, n, desc);
+#else
+    return mlp_eval_scalar(w, n, desc);
+#endif
 }

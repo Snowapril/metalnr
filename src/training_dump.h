@@ -1,11 +1,12 @@
-// Neural training-data generation (docs/architecture.md §8, protocol §1).
+// Neural training-data generation (the article's dataset: random cumulus shapes, camera-style
+// sampling, full in-scattered radiance targets).
 #pragma once
 
-// `cloudnr dump-training --out FILE.cnrd --seed-begin A --seed-end B --scenes K
-//  --records-per-scene R [--paths 1024] [--shadow-steps 16] [--template scenes/eval_medium.json]
-//  [--validate]`
-// Scene k uses density_seed A + (k mod (B - A)) (B exclusive, A >= 1000 because seeds
-// 1-999 are reserved for evaluation), sun elevation uniform in [5, 90] deg, azimuth uniform,
-// sigma_t_max log-uniform in [0.005, 0.15], unit lights; everything else from the template.
-// Writes a .cnrd file (CnrdHeader in neural_types.h) and prints a JSON summary.
+// `cloudnr dump-training --out FILE.cnrd --shape-begin A --shape-end B --shapes K
+//  --records-per-shape R [--paths 256] [--template scenes/cumulus.json] [--validate]`
+// Shape k uses cloud = makeRandomCumulus(A + (k mod (B - A)), template volume) (B exclusive,
+// A >= 1000 because seeds 1-999 are reserved for evaluation), sun elevation uniform in
+// [-10, 90] deg, azimuth uniform, sigma_t_max log-uniform in [0.02, 0.1], albedo/g from the
+// template, unit lights. Writes a .cnrd v2 file (CnrdHeader in neural_types.h), logs progress
+// per shape to stderr and prints a JSON summary.
 int cmdDumpTraining(int argc, char** argv);
