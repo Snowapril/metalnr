@@ -1,0 +1,105 @@
+{
+  "bias" : {
+    "notes" : "march discretization; octave multiple-scattering approximation"
+  },
+  "camera" : "backlit",
+  "config" : {
+    "ambient" : true,
+    "ambient_steps" : 4,
+    "ms_a" : 0.5,
+    "ms_b" : 0.5,
+    "ms_c" : 0.5,
+    "octaves" : 4,
+    "primary_steps" : 128,
+    "renderer" : "analytic",
+    "shadow_steps" : 16
+  },
+  "config_path" : "configs\/analytic.json",
+  "cpu_prep_ms" : {
+    "median" : 0.061249999999999999,
+    "p5" : 0.020167000000000001,
+    "p95" : 0.12,
+    "runs" : [
+      {
+        "median" : 0.063333,
+        "p5" : 0.016292000000000001,
+        "p95" : 0.121167
+      },
+      {
+        "median" : 0.060999999999999999,
+        "p5" : 0.020167000000000001,
+        "p95" : 0.12
+      },
+      {
+        "median" : 0.061249999999999999,
+        "p5" : 0.021208999999999999,
+        "p95" : 0.11908299999999999
+      }
+    ]
+  },
+  "equal_quality_pt_spp" : 32,
+  "excluded_costs_ms" : {
+    "bake" : 65.675000019837171,
+    "compile" : 0.24024999999999963,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 8.2090416690334678,
+    "p5" : 5.5206249817274511,
+    "p95" : 12.201208330225199,
+    "runs" : [
+      {
+        "median" : 8.300458372104913,
+        "p5" : 5.8422083384357393,
+        "p95" : 12.122625019401312
+      },
+      {
+        "median" : 7.0649999543093145,
+        "p5" : 4.6488750376738608,
+        "p95" : 12.201208330225199
+      },
+      {
+        "median" : 8.2090416690334678,
+        "p5" : 5.5206249817274511,
+        "p95" : 12.44229165604338
+      }
+    ]
+  },
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8355840,
+    "renderer" : 8356864
+  },
+  "metrics" : {
+    "psnr" : 35.834077171836391,
+    "relMSE" : 0.0074598381723857948,
+    "ssim" : 0.99591716413574416
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 1.33098717e-05,
+  "reference_id" : "results\/refs\/eval_medium_backlit\/ref.json",
+  "reference_spp_per_half" : 8192,
+  "renderer" : "analytic",
+  "renderer_version" : "nogit",
+  "scene" : "eval_medium",
+  "scene_version" : 2,
+  "seed" : null,
+  "spp_or_quality" : {
+    "ambient" : true,
+    "ambient_steps" : 4,
+    "octaves" : 4,
+    "primary_steps" : 128,
+    "shadow_steps" : 16
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

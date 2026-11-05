@@ -1,0 +1,105 @@
+{
+  "bias" : {
+    "notes" : "march discretization; neural target noise (log-space bias); fp16 weights"
+  },
+  "camera" : "side",
+  "config" : {
+    "model" : "models\/cloud_mlp.cnrm",
+    "primary_steps" : 128,
+    "renderer" : "neural",
+    "shadow_steps" : 16
+  },
+  "config_path" : "configs\/neural.json",
+  "cpu_prep_ms" : {
+    "median" : 0.096875000000000003,
+    "p5" : 0.027833,
+    "p95" : 0.14679200000000001,
+    "runs" : [
+      {
+        "median" : 0.096875000000000003,
+        "p5" : 0.029458999999999999,
+        "p95" : 0.14720800000000001
+      },
+      {
+        "median" : 0.095250000000000001,
+        "p5" : 0.023917000000000001,
+        "p95" : 0.13991700000000001
+      },
+      {
+        "median" : 0.097041000000000002,
+        "p5" : 0.027833,
+        "p95" : 0.14679200000000001
+      }
+    ]
+  },
+  "equal_quality_pt_spp" : 4096,
+  "excluded_costs_ms" : {
+    "bake" : 65.675000019837171,
+    "compile" : 1.1645000000000003,
+    "model_load" : 0.84612500000000002
+  },
+  "gpu_ms" : {
+    "median" : 90.891291678417474,
+    "p5" : 47.880749974865466,
+    "p95" : 135.43333334382623,
+    "runs" : [
+      {
+        "median" : 91.218125016894192,
+        "p5" : 48.040541645605117,
+        "p95" : 135.43649995699525
+      },
+      {
+        "median" : 90.891291678417474,
+        "p5" : 47.179166693240404,
+        "p95" : 135.43333334382623
+      },
+      {
+        "median" : 90.706874965690076,
+        "p5" : 47.880749974865466,
+        "p95" : 135.41149999946356
+      }
+    ]
+  },
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8617984,
+    "renderer" : 8363910
+  },
+  "metrics" : {
+    "psnr" : 54.611911940618405,
+    "relMSE" : 5.0330061300868205e-05,
+    "ssim" : 0.99968414600167355
+  },
+  "model" : {
+    "format_version" : 1,
+    "path" : "models\/cloud_mlp.cnrm",
+    "sha256" : "e3f8036c1732a9c3ae051f91efa221c4ab9c99b4f8ad1d3eea7ad4ae1c2c8c6d",
+    "train_seed_range" : [
+      1000,
+      1999
+    ]
+  },
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 3.24999077e-06,
+  "reference_id" : "results\/refs\/eval_medium_side\/ref.json",
+  "reference_spp_per_half" : 16384,
+  "renderer" : "neural",
+  "renderer_version" : "nogit",
+  "scene" : "eval_medium",
+  "scene_version" : 2,
+  "seed" : null,
+  "spp_or_quality" : {
+    "primary_steps" : 128,
+    "shadow_steps" : 16
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

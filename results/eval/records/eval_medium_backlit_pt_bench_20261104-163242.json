@@ -1,0 +1,98 @@
+{
+  "bias" : {
+    "bounce_cap_hits" : 0,
+    "mean_bounces" : 0.028120780285493828
+  },
+  "camera" : "backlit",
+  "config" : {
+    "max_bounces" : 0,
+    "renderer" : "pt",
+    "rr_start_bounce" : 16,
+    "seed" : 3,
+    "spp" : 64
+  },
+  "config_path" : "configs\/pt_bench.json",
+  "cpu_prep_ms" : {
+    "median" : 0.048375000000000001,
+    "p5" : 0.029083000000000001,
+    "p95" : 0.108458,
+    "runs" : [
+      {
+        "median" : 0.049042000000000002,
+        "p5" : 0.028917000000000002,
+        "p95" : 0.106125
+      },
+      {
+        "median" : 0.048375000000000001,
+        "p5" : 0.029666999999999999,
+        "p95" : 0.108458
+      },
+      {
+        "median" : 0.045707999999999999,
+        "p5" : 0.029083000000000001,
+        "p95" : 0.12425
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 65.675000019837171,
+    "compile" : 0.82874999999999943,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 1.578833325766027,
+    "p5" : 1.557125011458993,
+    "p95" : 1.6065000090748072,
+    "runs" : [
+      {
+        "median" : 1.5792500344105065,
+        "p5" : 1.5579583123326302,
+        "p95" : 1.6065000090748072
+      },
+      {
+        "median" : 1.5784583520144224,
+        "p5" : 1.555750030092895,
+        "p95" : 1.6077083419077098
+      },
+      {
+        "median" : 1.578833325766027,
+        "p5" : 1.557125011458993,
+        "p95" : 1.6053749714046717
+      }
+    ]
+  },
+  "gpu_ms_per_spp" : 1.578833325766027,
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8355840,
+    "renderer" : 8356880
+  },
+  "metrics" : {
+    "psnr" : 37.209859040747773,
+    "relMSE" : 0.0034256024354478174,
+    "ssim" : 0.95823284208271886
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 1.33098717e-05,
+  "reference_id" : "results\/refs\/eval_medium_backlit\/ref.json",
+  "reference_spp_per_half" : 8192,
+  "renderer" : "pt",
+  "renderer_version" : "nogit",
+  "scene" : "eval_medium",
+  "scene_version" : 2,
+  "seed" : 3,
+  "spp_or_quality" : {
+    "spp" : 64
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

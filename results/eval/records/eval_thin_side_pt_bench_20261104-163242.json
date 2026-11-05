@@ -1,0 +1,98 @@
+{
+  "bias" : {
+    "bounce_cap_hits" : 0,
+    "mean_bounces" : 0.0080721028645833331
+  },
+  "camera" : "side",
+  "config" : {
+    "max_bounces" : 0,
+    "renderer" : "pt",
+    "rr_start_bounce" : 16,
+    "seed" : 3,
+    "spp" : 64
+  },
+  "config_path" : "configs\/pt_bench.json",
+  "cpu_prep_ms" : {
+    "median" : 0.036166999999999998,
+    "p5" : 0.023167,
+    "p95" : 0.087666999999999995,
+    "runs" : [
+      {
+        "median" : 0.037374999999999999,
+        "p5" : 0.023167,
+        "p95" : 0.092374999999999999
+      },
+      {
+        "median" : 0.035000000000000003,
+        "p5" : 0.023167,
+        "p95" : 0.087666999999999995
+      },
+      {
+        "median" : 0.036166999999999998,
+        "p5" : 0.022374999999999999,
+        "p95" : 0.084625000000000006
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 64.314624993130565,
+    "compile" : 1.016375,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 0.68004167405888438,
+    "p5" : 0.67012500949203968,
+    "p95" : 0.71599998045712709,
+    "runs" : [
+      {
+        "median" : 0.68083335645496845,
+        "p5" : 0.67075004335492849,
+        "p95" : 0.71599998045712709
+      },
+      {
+        "median" : 0.6791250198148191,
+        "p5" : 0.66966668237000704,
+        "p95" : 0.72183331940323114
+      },
+      {
+        "median" : 0.68004167405888438,
+        "p5" : 0.67012500949203968,
+        "p95" : 0.71525003295391798
+      }
+    ]
+  },
+  "gpu_ms_per_spp" : 0.68004167405888438,
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8355840,
+    "renderer" : 8356880
+  },
+  "metrics" : {
+    "psnr" : 39.195440804340642,
+    "relMSE" : 0.00051090545770961606,
+    "ssim" : 0.96146889679471448
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 2.5833191112265716e-07,
+  "reference_id" : "results\/refs\/eval_thin_side\/ref.json",
+  "reference_spp_per_half" : 65536,
+  "renderer" : "pt",
+  "renderer_version" : "nogit",
+  "scene" : "eval_thin",
+  "scene_version" : 2,
+  "seed" : 3,
+  "spp_or_quality" : {
+    "spp" : 64
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

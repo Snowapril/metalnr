@@ -1,0 +1,105 @@
+{
+  "bias" : {
+    "notes" : "march discretization; neural target noise (log-space bias); fp16 weights"
+  },
+  "camera" : "side",
+  "config" : {
+    "model" : "models\/cloud_mlp.cnrm",
+    "primary_steps" : 128,
+    "renderer" : "neural",
+    "shadow_steps" : 16
+  },
+  "config_path" : "configs\/neural.json",
+  "cpu_prep_ms" : {
+    "median" : 0.10133300000000001,
+    "p5" : 0.029957999999999999,
+    "p95" : 0.15270800000000001,
+    "runs" : [
+      {
+        "median" : 0.097375000000000003,
+        "p5" : 0.030166999999999999,
+        "p95" : 0.140959
+      },
+      {
+        "median" : 0.103667,
+        "p5" : 0.023292,
+        "p95" : 0.15375
+      },
+      {
+        "median" : 0.10133300000000001,
+        "p5" : 0.029957999999999999,
+        "p95" : 0.15270800000000001
+      }
+    ]
+  },
+  "equal_quality_pt_spp" : 1024,
+  "excluded_costs_ms" : {
+    "bake" : 65.157125005498528,
+    "compile" : 1.5512090000000001,
+    "model_load" : 1.341083
+  },
+  "gpu_ms" : {
+    "median" : 71.889041690155864,
+    "p5" : 42.488250008318573,
+    "p95" : 105.51712499000132,
+    "runs" : [
+      {
+        "median" : 71.23474997933954,
+        "p5" : 43.254708347376436,
+        "p95" : 105.51712499000132
+      },
+      {
+        "median" : 71.910041675437242,
+        "p5" : 37.908458383753896,
+        "p95" : 105.97729170694947
+      },
+      {
+        "median" : 71.889041690155864,
+        "p5" : 42.488250008318573,
+        "p95" : 105.39112496189773
+      }
+    ]
+  },
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8355840,
+    "renderer" : 8363910
+  },
+  "metrics" : {
+    "psnr" : 50.435791629871161,
+    "relMSE" : 0.00021790204840851205,
+    "ssim" : 0.9989877377744345
+  },
+  "model" : {
+    "format_version" : 1,
+    "path" : "models\/cloud_mlp.cnrm",
+    "sha256" : "e3f8036c1732a9c3ae051f91efa221c4ab9c99b4f8ad1d3eea7ad4ae1c2c8c6d",
+    "train_seed_range" : [
+      1000,
+      1999
+    ]
+  },
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 1.77150032e-05,
+  "reference_id" : "results\/refs\/eval_thick_side\/ref.json",
+  "reference_spp_per_half" : 4096,
+  "renderer" : "neural",
+  "renderer_version" : "nogit",
+  "scene" : "eval_thick",
+  "scene_version" : 2,
+  "seed" : null,
+  "spp_or_quality" : {
+    "primary_steps" : 128,
+    "shadow_steps" : 16
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

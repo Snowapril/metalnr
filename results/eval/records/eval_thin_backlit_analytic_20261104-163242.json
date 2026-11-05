@@ -1,0 +1,105 @@
+{
+  "bias" : {
+    "notes" : "march discretization; octave multiple-scattering approximation"
+  },
+  "camera" : "backlit",
+  "config" : {
+    "ambient" : true,
+    "ambient_steps" : 4,
+    "ms_a" : 0.5,
+    "ms_b" : 0.5,
+    "ms_c" : 0.5,
+    "octaves" : 4,
+    "primary_steps" : 128,
+    "renderer" : "analytic",
+    "shadow_steps" : 16
+  },
+  "config_path" : "configs\/analytic.json",
+  "cpu_prep_ms" : {
+    "median" : 0.064875000000000002,
+    "p5" : 0.033584000000000003,
+    "p95" : 0.11695800000000001,
+    "runs" : [
+      {
+        "median" : 0.057291000000000002,
+        "p5" : 0.021666999999999999,
+        "p95" : 0.11695800000000001
+      },
+      {
+        "median" : 0.065500000000000003,
+        "p5" : 0.034833000000000003,
+        "p95" : 0.111666
+      },
+      {
+        "median" : 0.064875000000000002,
+        "p5" : 0.033584000000000003,
+        "p95" : 0.11804099999999999
+      }
+    ]
+  },
+  "equal_quality_pt_spp" : 32,
+  "excluded_costs_ms" : {
+    "bake" : 64.314624993130565,
+    "compile" : 0.24362499999999976,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 7.1308750193566084,
+    "p5" : 5.468500021379441,
+    "p95" : 9.5167083782143891,
+    "runs" : [
+      {
+        "median" : 7.1308750193566084,
+        "p5" : 5.4401249508373439,
+        "p95" : 10.191999957896769
+      },
+      {
+        "median" : 7.1516250027343631,
+        "p5" : 5.5723750265315175,
+        "p95" : 9.2681666719727218
+      },
+      {
+        "median" : 7.098000030964613,
+        "p5" : 5.468500021379441,
+        "p95" : 9.5167083782143891
+      }
+    ]
+  },
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8355840,
+    "renderer" : 8356864
+  },
+  "metrics" : {
+    "psnr" : 36.167771553661694,
+    "relMSE" : 0.0052082405106389715,
+    "ssim" : 0.99501431762721515
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 7.887251200287784e-07,
+  "reference_id" : "results\/refs\/eval_thin_backlit\/ref.json",
+  "reference_spp_per_half" : 65536,
+  "renderer" : "analytic",
+  "renderer_version" : "nogit",
+  "scene" : "eval_thin",
+  "scene_version" : 2,
+  "seed" : null,
+  "spp_or_quality" : {
+    "ambient" : true,
+    "ambient_steps" : 4,
+    "octaves" : 4,
+    "primary_steps" : 128,
+    "shadow_steps" : 16
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}

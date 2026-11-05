@@ -1,0 +1,98 @@
+{
+  "bias" : {
+    "bounce_cap_hits" : 0,
+    "mean_bounces" : 0.007895055700231482
+  },
+  "camera" : "backlit",
+  "config" : {
+    "max_bounces" : 0,
+    "renderer" : "pt",
+    "rr_start_bounce" : 16,
+    "seed" : 3,
+    "spp" : 64
+  },
+  "config_path" : "configs\/pt_bench.json",
+  "cpu_prep_ms" : {
+    "median" : 0.032417000000000001,
+    "p5" : 0.020333,
+    "p95" : 0.077124999999999999,
+    "runs" : [
+      {
+        "median" : 0.035083000000000003,
+        "p5" : 0.021874999999999999,
+        "p95" : 0.090457999999999997
+      },
+      {
+        "median" : 0.021041000000000001,
+        "p5" : 0.014833000000000001,
+        "p95" : 0.033250000000000002
+      },
+      {
+        "median" : 0.032417000000000001,
+        "p5" : 0.020333,
+        "p95" : 0.077124999999999999
+      }
+    ]
+  },
+  "excluded_costs_ms" : {
+    "bake" : 64.314624993130565,
+    "compile" : 0.81816599999999973,
+    "model_load" : null
+  },
+  "gpu_ms" : {
+    "median" : 0.67125004716217518,
+    "p5" : 0.663125014398247,
+    "p95" : 0.71758334524929523,
+    "runs" : [
+      {
+        "median" : 0.68041664781048894,
+        "p5" : 0.66637498093768954,
+        "p95" : 0.79395837383344769
+      },
+      {
+        "median" : 0.67125004716217518,
+        "p5" : 0.663125014398247,
+        "p95" : 0.71387499338015914
+      },
+      {
+        "median" : 0.67083333851769567,
+        "p5" : 0.663125014398247,
+        "p95" : 0.71758334524929523
+      }
+    ]
+  },
+  "gpu_ms_per_spp" : 0.67125004716217518,
+  "gpu_name" : "Apple M1",
+  "height" : 540,
+  "memory_bytes" : {
+    "density" : 25165824,
+    "device_delta" : 8355840,
+    "renderer" : 8356880
+  },
+  "metrics" : {
+    "psnr" : 37.731128580621338,
+    "relMSE" : 0.0017234367820053551,
+    "ssim" : 0.95905146865342206
+  },
+  "model" : null,
+  "os_version" : "Version 27.2 (Build 26B123)",
+  "reference_accepted" : true,
+  "reference_est_relMSE" : 7.887251200287784e-07,
+  "reference_id" : "results\/refs\/eval_thin_backlit\/ref.json",
+  "reference_spp_per_half" : 65536,
+  "renderer" : "pt",
+  "renderer_version" : "nogit",
+  "scene" : "eval_thin",
+  "scene_version" : 2,
+  "seed" : 3,
+  "spp_or_quality" : {
+    "spp" : 64
+  },
+  "timing" : {
+    "frames" : 300,
+    "runs" : 3,
+    "warmup" : 30
+  },
+  "validation_enabled" : false,
+  "width" : 960
+}
