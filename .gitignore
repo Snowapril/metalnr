@@ -1,0 +1,12 @@
+build/
+.venv/
+__pycache__/
+.DS_Store
+out/
+
+# Regenerable large artifacts (see README "Reproducing the results")
+data/
+results/refs/
+results/refs_quick/
+results/*.log
+results/**/*.pfm
