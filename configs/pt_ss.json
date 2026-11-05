@@ -1,0 +1,7 @@
+{
+  "renderer": "pt",
+  "spp": 4096,
+  "seed": 1,
+  "max_bounces": 1,
+  "rr_start_bounce": 16
+}

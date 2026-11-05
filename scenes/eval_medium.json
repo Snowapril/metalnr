@@ -1,0 +1,89 @@
+{
+  "version": 2,
+  "name": "eval_medium",
+  "cameras": [
+    {
+      "name": "side",
+      "position": [
+        1390.109,
+        200,
+        -563.558
+      ],
+      "target": [
+        0,
+        200,
+        0
+      ],
+      "vfov_deg": 40,
+      "exposure_ev": 0
+    },
+    {
+      "name": "backlit",
+      "position": [
+        -563.558,
+        200,
+        -1390.109
+      ],
+      "target": [
+        0,
+        200,
+        0
+      ],
+      "vfov_deg": 40,
+      "exposure_ev": 0
+    }
+  ],
+  "film": {
+    "width": 960,
+    "height": 540
+  },
+  "volume": {
+    "bounds_min": [
+      -400,
+      0,
+      -400
+    ],
+    "bounds_max": [
+      400,
+      400,
+      400
+    ],
+    "grid": [
+      256,
+      128,
+      256
+    ],
+    "density": "procedural",
+    "density_seed": 2,
+    "coverage": 0.5,
+    "erosion": 0.3,
+    "constant_density": 1.0
+  },
+  "medium": {
+    "sigma_t_max": 0.04,
+    "albedo": 0.99,
+    "hg_g": 0.8
+  },
+  "light": {
+    "sun_direction": [
+      0.3,
+      0.6,
+      0.74
+    ],
+    "sun_irradiance": [
+      3,
+      3,
+      3
+    ],
+    "sky_radiance": [
+      0.2,
+      0.3,
+      0.5
+    ],
+    "ground_radiance": [
+      0,
+      0,
+      0
+    ]
+  }
+}

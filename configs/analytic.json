@@ -1,0 +1,11 @@
+{
+  "renderer": "analytic",
+  "primary_steps": 128,
+  "shadow_steps": 16,
+  "ambient_steps": 4,
+  "octaves": 4,
+  "ms_a": 0.5,
+  "ms_b": 0.5,
+  "ms_c": 0.5,
+  "ambient": true
+}

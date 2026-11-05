@@ -1,0 +1,6 @@
+{
+  "renderer": "neural",
+  "model": "models/cloud_mlp.cnrm",
+  "primary_steps": 128,
+  "shadow_steps": 16
+}
