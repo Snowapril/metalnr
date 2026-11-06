@@ -165,4 +165,4 @@ Estimated reference error is relMSE(A, B) / 4 of the two independent halves.
 
 - reference: Monte Carlo noise (estimated above) and the path tracer bounce cap.
 - analytic: ray-march discretization, octave multiple-scattering approximation, two-direction ambient term.
-- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte Carlo noise in training targets; shader_ml uses fp16 activations and weights.
+- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte Carlo noise in training targets; shader_ml uses fp16 weights with fp32 activations and accumulation.

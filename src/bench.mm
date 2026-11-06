@@ -263,7 +263,7 @@ NSDictionary* benchRecordDictionary(const BenchResult& r) {
                                       ? @"march discretization; network approximation of in-scattering; Monte Carlo "
                                         @"noise in training targets"
                                       : @"march discretization; network approximation of in-scattering; Monte Carlo "
-                                        @"noise in training targets; fp16 activations and weights in matmul2d"};
+                                        @"noise in training targets; fp16 weights in matmul2d (fp32 activations)"};
     } else {
         d[@"bias"] = @{@"notes" : @"march discretization; octave multiple-scattering approximation; two-direction "
                                   @"ambient term"};

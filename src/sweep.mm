@@ -506,7 +506,7 @@ int cmdSweep(int argc, char** argv) {
     md += "\n## Bias sources\n\n- reference: Monte Carlo noise (estimated above) and the path tracer bounce cap.\n"
           "- analytic: ray-march discretization, octave multiple-scattering approximation, two-direction ambient "
           "term.\n- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte "
-          "Carlo noise in training targets; shader_ml uses fp16 activations and weights.\n";
+          "Carlo noise in training targets; shader_ml uses fp16 weights with fp32 activations and accumulation.\n";
     if (!writeTextFile(outDir + "/report.md", md, &error)) return fail(error);
 
     [[NSFileManager defaultManager] removeItemAtPath:ns(outDir + "/experiment.json") error:nil];

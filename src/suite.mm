@@ -502,7 +502,7 @@ int cmdSuite(int argc, char** argv) {
           "- analytic: ray-march discretization, two-direction ambient term, octave multiple-scattering "
           "approximation (not energy-conserving).\n"
           "- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte Carlo "
-          "noise in training targets; shader_ml uses fp16 activations and weights.\n";
+          "noise in training targets; shader_ml uses fp16 weights with fp32 activations and accumulation.\n";
     for (const CaseResult& c : cases) {
         for (const MethodRun& m : c.methods) {
             if (!m.result.has_model) continue;

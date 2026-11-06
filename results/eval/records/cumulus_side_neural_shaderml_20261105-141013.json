@@ -1,6 +1,6 @@
 {
   "bias" : {
-    "notes" : "march discretization; network approximation of in-scattering; Monte Carlo noise in training targets; fp16 activations and weights in matmul2d"
+    "notes" : "march discretization; network approximation of in-scattering; Monte Carlo noise in training targets; fp16 weights in matmul2d (fp32 activations)"
   },
   "camera" : "side",
   "config" : {

@@ -103,7 +103,7 @@ Compile times are wall time of MTL4Compiler calls and include Metal's shader cac
 
 - pt: bounce cap 4096 (hits listed per reference); low-spp pt methods carry Monte Carlo noise, not bias.
 - analytic: ray-march discretization, two-direction ambient term, octave multiple-scattering approximation (not energy-conserving).
-- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte Carlo noise in training targets; shader_ml uses fp16 activations and weights.
+- neural: ray-march discretization, network approximation of the in-scattered radiance, Monte Carlo noise in training targets; shader_ml uses fp16 weights with fp32 activations and accumulation.
 
 ## Neural model
 

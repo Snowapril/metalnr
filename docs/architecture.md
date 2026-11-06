@@ -41,9 +41,9 @@ Verified environment (observed on the target machine before writing this documen
 | `recommendedMaxWorkingSetSize` | ~12124 MB |
 | `maxBufferLength` | ~9093 MB |
 | `threadExecutionWidth` | 32 |
-| Xcode | 27.2 at `/Applications/Xcode.app`. The license is not accepted, so `xcodebuild`, `xcrun metal` and Xcode `swift` fail. There is no offline `metal` compiler. |
+| Xcode | 27.2 at `/Applications/Xcode.app`. Initially its license was not accepted (`xcodebuild`, `xcrun metal` failed); it was accepted later and the Metal toolchain downloaded, which enables `metal-package-builder` for the ML-encoder export (§9). The renderer itself still needs only the Command Line Tools. |
 | Command Line Tools | SDK `MacOSX27.2.sdk` with all `MTL4*.h`, `MTLTensor.h` and `MetalPerformancePrimitives.framework` |
-| Host tools | Apple clang 21, cmake 4.4.5, system Python 3.9.6 (no torch). The directory is not a git repository. |
+| Host tools | Apple clang 21, cmake 4.4.5, system Python 3.9.6 with a `.venv` (torch 2.8.0, numpy 2.0.2, coremltools 9.0). Git repository: github.com/Snowapril/metalnr. |
 
 A probe run with `DEVELOPER_DIR=/Library/Developer/CommandLineTools swift -` on the M1 confirmed the following:
 `MTL4Compiler newLibraryWithDescriptor:` compiled MSL from a source string, a compute pipeline sampling a
@@ -60,8 +60,8 @@ Decisions:
   This needs neither the Xcode license nor the offline toolchain, it was verified on the target,
   and it keeps host and shader structs in a single header.
 - Compile time is measured and reported separately from rendering (protocol §4).
-- Rejected alternative: an offline `metallib` built by Xcode. It is blocked by the license and the missing
-  toolchain. Revisit it only if runtime compile time becomes a measured problem.
+- Rejected alternative: an offline `metallib` built by Xcode. Runtime compilation works with only the Command Line
+  Tools and was verified first; revisit an offline `metallib` only if runtime compile time becomes a measured problem.
 - **Python** is used only for training (`tools/train.py`), never by the renderer or for evaluation; image metrics
   are computed in C++. It runs in a venv from `tools/requirements.txt` (torch 2.8.0, numpy 2.0.2, system Python 3.9.6).
 
@@ -347,7 +347,9 @@ MPSGraph.
 
 ## 10. Risks and dependencies
 
-- Xcode license and offline toolchain missing: mitigated by runtime compilation with `MTL4Compiler`.
+- Toolchain: the renderer needs only the Command Line Tools (runtime shader compilation). Exporting `.mtlpackage`
+  files needs Xcode with its license accepted and the Metal toolchain, plus the `coremlcompiler` layout workaround
+  in `tools/export_mtlpackage.py`; the committed packages render without either.
 - GPU watchdog killing long dispatches: render 1 spp per dispatch, and split into tiles if one dispatch exceeds about 0.5 s.
 - Reference convergence on the M1 may take hours for thick clouds, and the global majorant is inefficient for sparse density.
 - The octave approximation is not energy-conserving, so the analytic error includes a model bias by design.
