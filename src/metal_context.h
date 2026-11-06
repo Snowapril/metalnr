@@ -56,6 +56,13 @@ public:
     void removeResident(id<MTLAllocation> allocation);
     void commitResidency();
 
+    // Shared placement heap for MTL4MachineLearningCommandEncoder intermediates, at least minSize bytes and
+    // resident. Every ML pipeline reuses it (ML passes are ordered by barriers). Growing replaces the heap after
+    // waitIdle(); replaced heaps are kept alive until the context is destroyed, because Metal's GPU validation
+    // layer keeps referencing heaps passed to dispatchNetworkWithIntermediatesHeap: and crashes in a later
+    // commit if one is released (observed on macOS 27.2).
+    id<MTLHeap> machineLearningHeap(NSUInteger minSize, std::string* error);
+
     // Creates an argument table for compute (maxBufferBindCount/maxTextureBindCount).
     id<MTL4ArgumentTable> makeArgumentTable(uint32_t maxBuffers, uint32_t maxTextures,
                                             std::string* error);

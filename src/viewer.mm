@@ -286,13 +286,19 @@ void drawFrame(Viewer& v)
                                               slot * kExposureStride);
     *exposure = v.camera.exposure_ev;
 
-    id<MTL4ComputeCommandEncoder> compute = [commandBuffer computeCommandEncoder];
-    // The previous frame's display pass may still be reading the renderer output.
-    [compute barrierAfterQueueStages:MTLStageFragment
-                        beforeStages:MTLStageDispatch
-                   visibilityOptions:MTL4VisibilityOptionNone];
-    v.renderer->encode(compute, FrameInputs{makeSceneGPU(v.scene, v.camera), slot});
-    [compute endEncoding];
+    const FrameInputs frameInputs{makeSceneGPU(v.scene, v.camera), slot};
+    if (v.renderer->encodesOwnPasses()) {
+        // Its first pass waits for the previous frame's fragment stage itself (Renderer::encodeFrame).
+        v.renderer->encodeFrame(commandBuffer, frameInputs);
+    } else {
+        id<MTL4ComputeCommandEncoder> compute = [commandBuffer computeCommandEncoder];
+        // The previous frame's display pass may still be reading the renderer output.
+        [compute barrierAfterQueueStages:MTLStageFragment
+                            beforeStages:MTLStageDispatch
+                       visibilityOptions:MTL4VisibilityOptionNone];
+        v.renderer->encode(compute, frameInputs);
+        [compute endEncoding];
+    }
 
     v.displayPass.colorAttachments[0].texture = drawable.texture;
     id<MTL4RenderCommandEncoder> render = [commandBuffer renderCommandEncoderWithDescriptor:v.displayPass];

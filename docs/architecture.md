@@ -23,7 +23,7 @@ Decisions:
   13→16→16→3 squared-ReLU network trained on raw targets, and the sun-sweep evaluation.
 - Run the network three ways to exercise Metal 4: hand-written MSL loops (the article's HLSL equivalent), Metal 4
   Shader ML (`matmul2d` from MetalPerformancePrimitives inside the march), and `MTL4MachineLearningCommandEncoder`
-  (blocked on this machine, §9).
+  (a `.mtlpackage` network fed by a wavefront march, §8–§9).
 - Density: the procedural cumulus is baked into a 3D texture with mips. No VDB import.
 - The CLI and an interactive viewer (AppKit + `CAMetalLayer`, a tone-mapping render pass, orbit camera) are both
   part of Milestone 1. Benchmarks stay headless.
@@ -252,8 +252,11 @@ Outputs are $(f_{sun},f_{sky},f_{gnd})$; the shader combines them with the scene
   tensors are `[K][N]` with N contiguous. Weights are fp16, activations and accumulation fp32
   (`float × half → float`). fp16 activations were tried first and gave 1.08e-2 max relative error; fp32 activations
   give 3.6e-3.
-- `ml_encoder`: reserved for the `MTL4MachineLearningCommandEncoder` path (§9); the renderer reports it as
-  unavailable.
+- `ml_encoder`: `MTL4MachineLearningCommandEncoder` running the network from `models/<name>.mtlpackage` (§9). The
+  march is split into a wavefront: per chunk of 16 shaded samples per pixel, a compute pass resumes every pixel's march
+  (`march_advance`, the same code and sample order as `march_view_ray`) and writes raw descriptors and step weights;
+  one ML dispatch evaluates all rows; a compute pass adds $\sum_j w_j\,(f_j\cdot\text{lights})$. Chunks per frame
+  $=\lceil$`max_steps`$/16\rceil$, so no pixel is ever truncated and the image equals the scalar path.
 
 **Training data** (`cloudnr dump-training`, on the GPU):
 
@@ -315,16 +318,29 @@ Every API below was confirmed in the SDK 27.2 headers
 Validation runs use `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1`, which was verified to work with the Command Line Tools.
 Benchmarks run without them.
 
-**`MTL4MachineLearningCommandEncoder` (not available on this machine).** The SDK has the encoder, the
-pipeline descriptor, `newMachineLearningPipelineStateWithDescriptor:` and `dispatchNetworkWithIntermediatesHeap:`.
-A network must arrive as an `.mtlpackage` loaded with `newLibraryWithURL:`, and the only producer is Apple's
-offline `metal-package-builder` (Core ML `.mlpackage` → `.mtlpackage`), part of the Xcode Metal toolchain. Here the
-Xcode license is not accepted, so `xcrun` refuses every Xcode tool, and the Command Line Tools ship no
-`metal-package-builder`. A direct test confirmed `newLibraryWithURL:` rejects both a Core ML `.mlpackage` and a
-compiled `.mlmodelc` ("Invalid library file"). Enabling this path needs `sudo xcodebuild -license accept` and the
-Metal toolchain component. For a per-sample MLP evaluated inside a march, the encoder's dispatch-a-whole-network
-model also implies a split pass (write descriptors to a tensor, run the network, march again), so Shader ML is the
-natural fit and is the path used here.
+**`MTL4MachineLearningCommandEncoder`.** The network must arrive as an `.mtlpackage` loaded with
+`newLibraryWithURL:`; `tools/export_mtlpackage.py` produces it: `.cnrm` → PyTorch (parity-checked against the
+`.check.bin`) → Core ML mlprogram (fp32, input `x` [N,13], output `f` [N,3], flexible N) → Apple's offline
+`metal-package-builder` (Xcode Metal toolchain; `sudo xcodebuild -license accept` and
+`xcodebuild -downloadComponent MetalToolchain`). Runtime APIs: `MTL4MachineLearningPipelineDescriptor` with
+`setInputDimensions:atBufferIndex:` for the batch and `MTL4PipelineOptions.shaderReflection` (otherwise the reflection
+is empty), `newMachineLearningPipelineStateWithDescriptor:`, tensors from shared buffers
+(`newTensorWithDescriptor:offset:`, `MTLTensorUsageMachineLearning`) bound with `MTL4ArgumentTable setResource:atBufferIndex:`,
+`machineLearningCommandEncoder`, `dispatchNetworkWithIntermediatesHeap:` with a placement heap, and
+`MTLStageMachineLearning` barriers between the compute and ML passes.
+
+Toolchain and runtime findings (macOS 27.2, Metal toolchain 27.2.47):
+
+- `metal-package-builder` runs from a read-only cryptex mount and looks for `coremlcompiler` in a sibling
+  `XcodeDefault.xctoolchain` that does not exist there. The export script runs the unmodified Apple binary from a
+  temporary directory that recreates that layout (symlinks to the real `usr/lib`, `System` and Xcode's `coremlcompiler`).
+- The builder has no rewrite patterns for the macOS 26 (`ios19`) Core ML opset's binary elementwise ops (`sub`, `mul`,
+  `minimum` abort with "Missing pattern to rewrite MIL op"); exporting with the macOS 15 (`ios18`) opset lowers fully.
+- ML tensor row strides must be multiples of 64 bytes, so descriptor and output rows are padded to 16 floats.
+- Releasing an intermediates heap after it was dispatched makes the GPU validation layer crash in a later commit, so
+  `MetalContext::machineLearningHeap` owns one shared heap for its lifetime.
+- The encoder dispatches a whole network over a fixed-size batch, so a per-step network inside a march costs
+  `max_steps` rows per pixel per frame, including finished pixels; measured cost is in protocol §8 and the README.
 
 Not used: render pipelines other than the viewer display pass, acceleration structures, MetalFX, CoreML at runtime,
 MPSGraph.
@@ -379,6 +395,7 @@ ctest --test-dir build --output-on-failure          # tests run under the Metal 
 ./build/cloudnr dump-training --out data/train.cnrd --shape-begin 1000 --shape-end 2000 --shapes 300 --records-per-shape 4096
 ./build/cloudnr dump-training --out data/val.cnrd   --shape-begin 2000 --shape-end 3000 --shapes 32  --records-per-shape 4096
 .venv/bin/python tools/train.py --train data/train.cnrd --val data/val.cnrd --out models/cumulus_net
+.venv/bin/python tools/export_mtlpackage.py --model models/cumulus_net.cnrm   # ML encoder package (Xcode Metal toolchain)
 ./build/cloudnr neural-check --model models/cumulus_net.cnrm --check models/cumulus_net.check.bin
 ./build/cloudnr sweep --experiment experiments/sweep.json      # the article's sun sweep; --quick for a smoke run
 ./build/cloudnr suite --experiment experiments/eval.json      # add --quick for a smoke run

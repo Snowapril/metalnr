@@ -3,12 +3,14 @@
 #include "density_volume.h"
 #include "metal_context.h"
 #include "neural_model.h"
+#include "neural_mlencoder.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -35,7 +37,10 @@ bool parseInference(const std::string& name, NeuralInference* out, std::string* 
         *out = NeuralInference::ShaderML;
         return true;
     }
-    if (name == "ml_encoder") return fail(error, "ml_encoder inference is provided by the ML encoder module");
+    if (name == "ml_encoder") {
+        *out = NeuralInference::MLEncoder;
+        return true;
+    }
     return fail(error, "neural renderer: unknown inference '" + name + "' (expected scalar, shader_ml or ml_encoder)");
 }
 
@@ -77,22 +82,18 @@ public:
         if (!(config.step_scale > 0.0f) || config.max_steps == 0)
             return fail(error, "neural renderer: step_scale and max_steps must be > 0");
         id<MTLDevice> device = context.device();
+        const bool mlEncoder = inference_ == NeuralInference::MLEncoder;
 
         // Model load (file read, validation, hash, weight upload) is an excluded cost.
         const auto loadStart = std::chrono::steady_clock::now();
         std::optional<NeuralModel> model = loadNeuralModel(config.model, error);
         if (!model) return false;
         if (!validateNeuralModelForScene(*model, scene, error)) return false;
-        if (!makeWeightBuffers(device, *model, inference_, &weights_, error)) return false;
+        // ml_encoder: the weights live in the .mtlpackage (loaded by NeuralMLEncoder, a compile cost).
+        if (!mlEncoder && !makeWeightBuffers(device, *model, inference_, &weights_, error)) return false;
         modelLoadMs_ =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
         weightCount_ = model->weights.size();
-
-        pipeline_ = context.makeComputePipeline(neuralShaderFiles("src/shaders/neural.metal"), "neural_render",
-                                                neuralShaderDefines(model->dims, inference_), error);
-        if (!pipeline_) return false;
-        table_ = context.makeArgumentTable(4, 2, error);
-        if (!table_) return false;
 
         uniforms_ = [device newBufferWithLength:kSlotStride * MetalContext::kFramesInFlight
                                         options:MTLResourceStorageModeShared];
@@ -109,12 +110,19 @@ public:
 
         params_.march = makeMarchParams(config);
         params_.norm = neuralStandardization(*model);
+        context_ = &context;
+        if (mlEncoder) return initWave(context, scene, config, *model, density, error);
+
+        pipeline_ = context.makeComputePipeline(neuralShaderFiles("src/shaders/neural.metal"), "neural_render",
+                                                neuralShaderDefines(model->dims, inference_), error);
+        if (!pipeline_) return false;
+        table_ = context.makeArgumentTable(4, 2, error);
+        if (!table_) return false;
         [table_ setAddress:weights_.weights.gpuAddress atIndex:2];
         if (weights_.weights16) [table_ setAddress:weights_.weights16.gpuAddress atIndex:3];
         [table_ setTexture:density.texture().gpuResourceID atIndex:0];
         [table_ setTexture:output_.gpuResourceID atIndex:1];
 
-        context_ = &context;
         resident_ = {weights_.weights, uniforms_, output_};
         if (weights_.weights16) resident_.push_back(weights_.weights16);
         for (id<MTLAllocation> allocation : resident_) context.addResident(allocation);
@@ -124,36 +132,138 @@ public:
 
     const char* name() const override { return "neural"; }
 
-    void encode(id<MTL4ComputeCommandEncoder> encoder, const FrameInputs& in) override {
-        const NSUInteger slotOffset = in.slot * kSlotStride;
-        uint8_t* slot = static_cast<uint8_t*>(uniforms_.contents) + slotOffset;
-        std::memcpy(slot, &in.scene, sizeof(SceneGPU));
-        std::memcpy(slot + kParamsOffset, &params_, sizeof(NeuralParams));
+    bool encodesOwnPasses() const override { return ml_ != nullptr; }
 
-        // The argument table is snapshotted at dispatch, so rebinding per frame is safe.
-        [table_ setAddress:uniforms_.gpuAddress + slotOffset atIndex:0];
-        [table_ setAddress:uniforms_.gpuAddress + slotOffset + kParamsOffset atIndex:1];
+    void encode(id<MTL4ComputeCommandEncoder> encoder, const FrameInputs& in) override {
+        if (ml_) {
+            // Renderer contract: encodesOwnPasses() renderers are driven through encodeFrame() only.
+            std::fprintf(stderr, "cloudnr: neural ml_encoder renderer: encode() called; use encodeFrame()\n");
+            std::abort();
+        }
+        bindFrameUniforms(in);
         [encoder setComputePipelineState:pipeline_];
         [encoder setArgumentTable:table_];
         [encoder dispatchThreads:MTLSizeMake(output_.width, output_.height, 1)
            threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
     }
 
+    // ml_encoder: wave_init; chunks x {wave_gather -> ML dispatch -> wave_accumulate}; wave_finish.
+    void encodeFrame(id<MTL4CommandBuffer> commandBuffer, const FrameInputs& in) override {
+        if (!ml_) {
+            Renderer::encodeFrame(commandBuffer, in);
+            return;
+        }
+        bindFrameUniforms(in);
+        const MTLSize grid = MTLSizeMake(output_.width, output_.height, 1);
+        const MTLSize group = MTLSizeMake(8, 8, 1);
+        id<MTL4ComputeCommandEncoder> compute = [commandBuffer computeCommandEncoder];
+        // The previous frame may still use the per-pixel state, the ML rows, or read output() (viewer).
+        [compute barrierAfterQueueStages:MTLStageDispatch | MTLStageMachineLearning | MTLStageFragment
+                            beforeStages:MTLStageDispatch
+                       visibilityOptions:MTL4VisibilityOptionDevice];
+        [compute setArgumentTable:table_];
+        [compute setComputePipelineState:waveInit_];
+        [compute dispatchThreads:grid threadsPerThreadgroup:group];
+        for (uint32_t chunk = 0; chunk < chunks_; ++chunk) {
+            [compute barrierAfterEncoderStages:MTLStageDispatch
+                           beforeEncoderStages:MTLStageDispatch
+                             visibilityOptions:MTL4VisibilityOptionDevice];
+            [compute setComputePipelineState:waveGather_];
+            [compute dispatchThreads:grid threadsPerThreadgroup:group];
+            [compute endEncoding];
+
+            ml_->encode(commandBuffer);  // waits for the gather (queue barrier after dispatch)
+
+            compute = [commandBuffer computeCommandEncoder];
+            [compute barrierAfterQueueStages:MTLStageDispatch | MTLStageMachineLearning
+                                beforeStages:MTLStageDispatch
+                           visibilityOptions:MTL4VisibilityOptionDevice];
+            [compute setArgumentTable:table_];
+            [compute setComputePipelineState:waveAccumulate_];
+            [compute dispatchThreads:grid threadsPerThreadgroup:group];
+        }
+        [compute barrierAfterEncoderStages:MTLStageDispatch
+                       beforeEncoderStages:MTLStageDispatch
+                         visibilityOptions:MTL4VisibilityOptionDevice];
+        [compute setComputePipelineState:waveFinish_];
+        [compute dispatchThreads:grid threadsPerThreadgroup:group];
+        [compute endEncoding];
+    }
+
     id<MTLTexture> output() const override { return output_; }
 
     uint64_t memoryBytes() const override {
-        uint64_t bytes = weights_.weights.allocatedSize + uniforms_.allocatedSize + output_.allocatedSize;
+        uint64_t bytes = uniforms_.allocatedSize + output_.allocatedSize;
+        if (weights_.weights) bytes += weights_.weights.allocatedSize;
         if (weights_.weights16) bytes += weights_.weights16.allocatedSize;
+        if (ml_) bytes += waveState_.allocatedSize + waveWeights_.allocatedSize + ml_->memoryBytes();
         return bytes;
     }
 
     std::vector<std::pair<std::string, double>> stats() const override {
         return {{"model_load_ms", modelLoadMs_},
                 {"model_weights", double(weightCount_)},
-                {"shader_ml", inference_ == NeuralInference::ShaderML ? 1.0 : 0.0}};
+                {"shader_ml", inference_ == NeuralInference::ShaderML ? 1.0 : 0.0},
+                {"ml_encoder", ml_ ? 1.0 : 0.0},
+                {"ml_encoder_chunks", double(chunks_)}};
     }
 
 private:
+    // ml_encoder: ML batch = pixels * CNR_WAVE_SAMPLES rows; ceil(max_steps / CNR_WAVE_SAMPLES) chunks, so
+    // even a march that shades every one of its max_steps segments finishes.
+    bool initWave(MetalContext& context, const Scene& scene, const RenderConfig& config, const NeuralModel& model,
+                  const DensityVolume& density, std::string* error) {
+        id<MTLDevice> device = context.device();
+        const uint64_t pixels = uint64_t(scene.width) * scene.height;
+        ml_ = NeuralMLEncoder::create(context, model, pixels * CNR_WAVE_SAMPLES, error);
+        if (!ml_) return false;
+        chunks_ = (config.max_steps + CNR_WAVE_SAMPLES - 1) / CNR_WAVE_SAMPLES;
+
+        const std::vector<std::string> files = neuralShaderFiles("src/shaders/neural_wave.metal");
+        const std::string defines = neuralShaderDefines(model.dims, inference_);
+        auto build = [&](const char* function) { return context.makeComputePipeline(files, function, defines, error); };
+        waveInit_ = build("wave_init");
+        if (!waveInit_) return false;
+        waveGather_ = build("wave_gather");
+        if (!waveGather_) return false;
+        waveAccumulate_ = build("wave_accumulate");
+        if (!waveAccumulate_) return false;
+        waveFinish_ = build("wave_finish");
+        if (!waveFinish_) return false;
+        table_ = context.makeArgumentTable(6, 2, error);
+        if (!table_) return false;
+
+        waveState_ = [device newBufferWithLength:pixels * CNR_WAVE_STATE_BYTES options:MTLResourceStorageModePrivate];
+        waveWeights_ = [device newBufferWithLength:pixels * CNR_WAVE_SAMPLES * sizeof(float)
+                                           options:MTLResourceStorageModePrivate];
+        if (!waveState_ || !waveWeights_) return fail(error, "neural renderer: wave buffer allocation failed");
+        waveState_.label = @"neural wave march state";
+        waveWeights_.label = @"neural wave sample weights";
+        [table_ setAddress:waveState_.gpuAddress atIndex:2];
+        [table_ setAddress:ml_->inputs().gpuAddress atIndex:3];
+        [table_ setAddress:waveWeights_.gpuAddress atIndex:4];
+        [table_ setAddress:ml_->outputs().gpuAddress atIndex:5];
+        [table_ setTexture:density.texture().gpuResourceID atIndex:0];
+        [table_ setTexture:output_.gpuResourceID atIndex:1];
+
+        resident_ = {uniforms_, output_, waveState_, waveWeights_};
+        for (id<MTLAllocation> allocation : resident_) context.addResident(allocation);
+        context.commitResidency();
+        return true;
+    }
+
+    // Writes slot in.slot (SceneGPU, then NeuralParams whose first member is the MarchParams of the wave
+    // kernels) and binds it at buffers 0 and 1.
+    void bindFrameUniforms(const FrameInputs& in) {
+        const NSUInteger slotOffset = in.slot * kSlotStride;
+        uint8_t* slot = static_cast<uint8_t*>(uniforms_.contents) + slotOffset;
+        std::memcpy(slot, &in.scene, sizeof(SceneGPU));
+        std::memcpy(slot + kParamsOffset, &params_, sizeof(NeuralParams));
+        // The argument table is snapshotted at dispatch, so rebinding per frame is safe.
+        [table_ setAddress:uniforms_.gpuAddress + slotOffset atIndex:0];
+        [table_ setAddress:uniforms_.gpuAddress + slotOffset + kParamsOffset atIndex:1];
+    }
+
     MetalContext* context_ = nullptr;
     NeuralInference inference_ = NeuralInference::Scalar;
     id<MTLComputePipelineState> pipeline_ = nil;
@@ -165,6 +275,15 @@ private:
     NeuralParams params_{};
     double modelLoadMs_ = 0.0;
     size_t weightCount_ = 0;
+    // ml_encoder only.
+    std::unique_ptr<NeuralMLEncoder> ml_;
+    uint32_t chunks_ = 0;
+    id<MTLComputePipelineState> waveInit_ = nil;
+    id<MTLComputePipelineState> waveGather_ = nil;
+    id<MTLComputePipelineState> waveAccumulate_ = nil;
+    id<MTLComputePipelineState> waveFinish_ = nil;
+    id<MTLBuffer> waveState_ = nil;
+    id<MTLBuffer> waveWeights_ = nil;
 };
 
 std::string jsonEscape(const std::string& s) {
@@ -211,7 +330,7 @@ std::unique_ptr<Renderer> makeNeuralRenderer(MetalContext& context, const Scene&
 }
 
 bool evalNeuralBatch(MetalContext& context, const NeuralModel& model, const std::vector<float>& inputs,
-                     std::vector<float>* outputs, NeuralInference inference, std::string* error) {
+                     std::vector<float>* outputs, NeuralInference inference, std::string* error, double* gpuMs) {
     const uint32_t nIn = model.dims.n_in;
     if (nIn == 0 || inputs.size() % nIn != 0)
         return fail(error, "evalNeuralBatch: input size is not a multiple of n_in");
@@ -220,6 +339,20 @@ bool evalNeuralBatch(MetalContext& context, const NeuralModel& model, const std:
     outputs->assign(count * 3, 0.0f);
     if (count == 0) return true;
 
+    if (inference == NeuralInference::MLEncoder) {
+        // One ML encoder dispatch over padded rows (13 raw inputs + pad in, f + pad out).
+        std::unique_ptr<NeuralMLEncoder> ml = NeuralMLEncoder::create(context, model, count, error);
+        if (!ml) return false;
+        float* x = static_cast<float*>(ml->inputs().contents);
+        for (size_t i = 0; i < count; ++i)
+            std::memcpy(x + i * kMLEncoderRowFloats, inputs.data() + i * nIn, nIn * sizeof(float));
+        if (!context.runSync([&](id<MTL4CommandBuffer> commandBuffer) { ml->encode(commandBuffer); }, gpuMs, error))
+            return false;
+        const float* f = static_cast<const float*>(ml->outputs().contents);
+        for (size_t i = 0; i < count; ++i)
+            for (size_t k = 0; k < 3; ++k) (*outputs)[i * 3 + k] = f[i * kMLEncoderRowFloats + k];
+        return true;
+    }
     id<MTLComputePipelineState> pipeline =
         context.makeComputePipeline(neuralShaderFiles("src/shaders/neural.metal"), "neural_eval_batch",
                                     neuralShaderDefines(model.dims, inference), error);
@@ -260,7 +393,7 @@ bool evalNeuralBatch(MetalContext& context, const NeuralModel& model, const std:
             [encoder dispatchThreads:MTLSizeMake(count, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
             [encoder endEncoding];
         },
-        nullptr, error);
+        gpuMs, error);
 
     for (id<MTLAllocation> allocation : resident) context.removeResident(allocation);
     context.commitResidency();
@@ -337,9 +470,15 @@ int cmdNeuralCheck(int argc, char** argv) {
     constexpr double kTolerance = 1e-2;
     bool pass = true;
     std::string variants;
-    for (NeuralInference inference : {NeuralInference::Scalar, NeuralInference::ShaderML}) {
+    std::vector<NeuralInference> available = {NeuralInference::Scalar, NeuralInference::ShaderML};
+    if (mlPackageExists(modelPath))
+        available.push_back(NeuralInference::MLEncoder);
+    else
+        variants += ",\"ml_encoder\":\"unavailable (no .mtlpackage)\"";
+    for (NeuralInference inference : available) {
         std::vector<float> outputs;
-        if (!evalNeuralBatch(*context, *model, inputs, &outputs, inference, &error)) {
+        double gpuMs = 0.0;
+        if (!evalNeuralBatch(*context, *model, inputs, &outputs, inference, &error, &gpuMs)) {
             std::fprintf(stderr, "cloudnr: %s inference: %s\n", neuralInferenceName(inference), error.c_str());
             return 1;
         }
@@ -348,9 +487,10 @@ int cmdNeuralCheck(int argc, char** argv) {
         pass = pass && ok;
         char buf[256];
         std::snprintf(buf, sizeof(buf),
-                      "\"%s\":{\"max_rel\":%.9g,\"mean_rel\":%.9g,\"max_abs\":%.9g,\"finite\":%s,\"pass\":%s}",
+                      "\"%s\":{\"max_rel\":%.9g,\"mean_rel\":%.9g,\"max_abs\":%.9g,\"finite\":%s,\"pass\":%s,"
+                      "\"gpu_ms\":%.6g}",
                       neuralInferenceName(inference), st.maxRel, st.meanRel, st.maxAbs, st.finite ? "true" : "false",
-                      ok ? "true" : "false");
+                      ok ? "true" : "false", gpuMs);
         variants += "," + std::string(buf);
     }
     context->waitIdle();

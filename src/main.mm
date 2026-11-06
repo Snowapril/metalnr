@@ -174,9 +174,7 @@ int cmdRender(int argc, char** argv) {
     for (uint32_t f = 0; f < frames; ++f) {
         id<MTL4CommandBuffer> commandBuffer = context->beginFrame();
         const auto start = std::chrono::steady_clock::now();
-        id<MTL4ComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
-        renderer->encode(encoder, FrameInputs{sceneGPU, context->currentSlot()});
-        [encoder endEncoding];
+        renderer->encodeFrame(commandBuffer, FrameInputs{sceneGPU, context->currentSlot()});
         context->endFrame(commandBuffer, [&gpuMutex, &gpuMs](double ms, NSError* e) {
             if (e) return;
             std::lock_guard<std::mutex> lock(gpuMutex);

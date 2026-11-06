@@ -151,3 +151,7 @@ a path-traced reference at every position, as in the article.
 - Methods: `analytic`, `neural_single` (scalar), `neural_single_shaderml` (Shader ML), `neural` (generalist). The
   same-cloud specialist is the article's setup; the generalist column shows what is lost without training on the cloud.
 - Outputs: `sweep.csv`, `report.md`, per-angle image strips (reference, then each method), records, experiment copy.
+- The `ml_encoder` variant is not in the sweep: its image equals the scalar variant's (relMSE 2.3e-15, enforced by
+  `test_neural`), so its scores are identical, and its frame cost (~1.8 s at 480×270) would make a 13-angle protocol
+  sweep take hours. Its timing is measured separately with `bench` at 240×135 (`results/mlencoder/`), next to the
+  scalar and Shader ML variants under the same protocol.

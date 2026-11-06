@@ -1,3 +1,4 @@
 # Resolved with system Python 3.9.6 (/usr/bin/python3) into .venv
 numpy==2.0.2
 torch==2.8.0
+coremltools==9.0

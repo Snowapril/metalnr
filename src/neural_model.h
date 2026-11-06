@@ -14,10 +14,11 @@
 // Descriptor radii (m); the model header must carry exactly these.
 inline constexpr std::array<float, CNR_NN_RADII> kNeuralRadii = {6.0f, 12.0f, 24.0f, 48.0f, 96.0f, 192.0f};
 
-// RenderConfig.inference values with an in-module implementation.
+// RenderConfig.inference values.
 enum class NeuralInference {
-    Scalar,    // "scalar": hand-written MSL loops, fp32 weights
-    ShaderML,  // "shader_ml": Metal 4 Shader ML matmul2d, fp16 weights and activations
+    Scalar,     // "scalar": hand-written MSL loops, fp32 weights
+    ShaderML,   // "shader_ml": Metal 4 Shader ML matmul2d, fp16 weights and activations
+    MLEncoder,  // "ml_encoder": MTL4MachineLearningCommandEncoder on <stem>.mtlpackage, fp32 (neural_mlencoder.h)
 };
 const char* neuralInferenceName(NeuralInference inference);
 

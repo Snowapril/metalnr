@@ -1,0 +1,47 @@
+{
+  "source_model": "models/cumulus_net.cnrm",
+  "source_sha256": "62915273e567e2ffc83ed0f9f50b21c46eaf94ece30ac3d534f6da70f48ebb2d",
+  "hg_g": 0.800000011920929,
+  "albedo": 0.9900000095367432,
+  "mlpackage": "models/cumulus_net.mlpackage",
+  "mtlpackage": "models/cumulus_net.mtlpackage",
+  "function": "main",
+  "inputs": {
+    "x": {
+      "shape": [
+        "N",
+        13
+      ],
+      "dtype": "float32",
+      "content": "raw descriptor (standardization is inside the network)"
+    }
+  },
+  "outputs": {
+    "f": {
+      "shape": [
+        "N",
+        3
+      ],
+      "dtype": "float32",
+      "content": "min(y, clamp) = (f_sun, f_sky, f_gnd)"
+    }
+  },
+  "max_batch": 16777216,
+  "precision": "fp32",
+  "torch_parity": {
+    "check_file": "models/cumulus_net.check.bin",
+    "max_rel": 0.0,
+    "mean_rel": 0.0
+  },
+  "coremltools_version": "9.0",
+  "torch_version": "2.8.0",
+  "numpy_version": "2.0.2",
+  "python_version": "3.9.6",
+  "builder": "/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.xG7EnB/Metal.xctoolchain/usr/bin/metal-package-builder",
+  "builder_args": [
+    "-ml",
+    "--mtargetos",
+    "macos26.0"
+  ],
+  "renderer_version": "8fa3242-dirty"
+}

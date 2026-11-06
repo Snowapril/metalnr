@@ -1,0 +1,10 @@
+{
+  "renderer": "neural",
+  "model": "models/cumulus_net.cnrm",
+  "inference": "ml_encoder",
+  "step_scale": 1,
+  "max_steps": 512,
+  "min_transmittance": 0.01,
+  "dither": true,
+  "empty_skip": true
+}

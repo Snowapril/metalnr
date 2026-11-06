@@ -1,6 +1,8 @@
 // Neural shader tests: .cnrm v2 loader validation and weight layouts, GPU scalar and Shader ML
-// evaluators vs a CPU fp32 reference, descriptor on a constant-density box, and small neural renders
-// with both inference variants. Runs under the Metal debug layer and shader validation. No Python.
+// evaluators vs a CPU fp32 reference, descriptor on a constant-density box, small neural renders
+// with both compute inference variants, and the ml_encoder variant (batch parity vs PyTorch and render
+// equality with scalar; skipped when models/cumulus_single.mtlpackage is absent). Runs under the Metal
+// debug layer and shader validation. No Python.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
@@ -9,6 +11,7 @@
 #include "density_volume.h"
 #include "image_io.h"
 #include "metal_context.h"
+#include "neural_mlencoder.h"
 #include "neural_model.h"
 #include "neural_renderer.h"
 #include "renderer.h"
@@ -19,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <utility>
@@ -415,9 +419,7 @@ bool renderOnce(MetalContext& context, Renderer& renderer, const Scene& scene, s
     const SceneGPU sceneGPU = makeSceneGPU(scene, scene.cameras[0]);
     const bool ok = context.runSync(
         [&](id<MTL4CommandBuffer> commandBuffer) {
-            id<MTL4ComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
-            renderer.encode(encoder, FrameInputs{sceneGPU, context.currentSlot()});
-            [encoder endEncoding];
+            renderer.encodeFrame(commandBuffer, FrameInputs{sceneGPU, context.currentSlot()});
         },
         nullptr, error);
     if (!ok) return false;
@@ -450,12 +452,12 @@ void testNeuralRender(MetalContext& context, const std::string& dir) {
     config.dither = false;
     config.empty_skip = false;
 
-    // ml_encoder belongs to a separate module; an unknown variant is an error.
+    // ml_encoder needs <stem>.mtlpackage exported from the .cnrm; the synthetic model has none.
     RenderConfig encoderConfig = config;
     encoderConfig.inference = "ml_encoder";
     std::string encoderError;
     CHECK(makeNeuralRenderer(context, scene, encoderConfig, *volume, &encoderError) == nullptr);
-    CHECK(encoderError == "ml_encoder inference is provided by the ML encoder module");
+    CHECK(encoderError.find(".mtlpackage") != std::string::npos);
     RenderConfig unknownConfig = config;
     unknownConfig.inference = "magic";
     std::string unknownError;
@@ -529,6 +531,106 @@ void testNeuralRender(MetalContext& context, const std::string& dir) {
     }
 }
 
+// ml_encoder on the trained single-shape model (fp32 .mtlpackage from tools/export_mtlpackage.py): batch parity
+// against the PyTorch fp32 outputs of the check file, and a small render of scenes/cumulus.json with the march
+// defaults that must equal the scalar variant (same march and sample order, fp32 network both ways).
+void testMLEncoder(MetalContext& context) {
+    const std::string root = CLOUDNR_SOURCE_ROOT;
+    const std::string modelPath = root + "/models/cumulus_single.cnrm";
+    if (!mlPackageExists(modelPath)) {
+        std::fprintf(stderr, "SKIP ml_encoder tests: %s not found (run tools/export_mtlpackage.py)\n",
+                     mlPackagePath(modelPath).c_str());
+        return;
+    }
+    std::string error;
+    std::optional<NeuralModel> model = loadNeuralModel(modelPath, &error);
+    CHECK(model.has_value());
+    if (!model) return report("load cumulus_single", error);
+
+    // Batch parity vs PyTorch (CNRC v2: header, inputs[count][13], outputs[count][3]).
+    std::ifstream in(root + "/models/cumulus_single.check.bin", std::ios::binary);
+    const std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CnrcHeader header{};
+    if (bytes.size() >= sizeof(header)) std::memcpy(&header, bytes.data(), sizeof(header));
+    const size_t count = header.count;
+    const bool checkOk = bytes.size() >= sizeof(header) && std::memcmp(header.magic, "CNRC", 4) == 0 &&
+                         header.n_in == CNR_NN_IN && header.n_out == CNR_NN_OUT &&
+                         bytes.size() == sizeof(header) + count * (CNR_NN_IN + CNR_NN_OUT) * sizeof(float);
+    CHECK(checkOk);
+    if (checkOk) {
+        std::vector<float> inputs(count * CNR_NN_IN);
+        std::vector<float> expected(count * CNR_NN_OUT);
+        std::memcpy(inputs.data(), bytes.data() + sizeof(header), inputs.size() * sizeof(float));
+        std::memcpy(expected.data(), bytes.data() + sizeof(header) + inputs.size() * sizeof(float),
+                    expected.size() * sizeof(float));
+        std::vector<float> outputs;
+        double gpuMs = 0.0;
+        const bool ok = evalNeuralBatch(context, *model, inputs, &outputs, NeuralInference::MLEncoder, &error, &gpuMs);
+        CHECK(ok);
+        if (!ok) {
+            report("ml_encoder batch", error);
+        } else {
+            CHECK(outputs.size() == expected.size());
+            double maxRel = 0.0;
+            bool finite = true;
+            for (size_t i = 0; i < expected.size() && i < outputs.size(); ++i) {
+                finite = finite && std::isfinite(outputs[i]);
+                maxRel = std::max(maxRel, std::fabs(double(outputs[i]) - expected[i]) / (std::fabs(expected[i]) + 1e-3));
+            }
+            CHECK(finite);
+            CHECK(maxRel < 1e-4);
+            std::fprintf(stderr, "ml_encoder parity vs torch: %zu rows, max rel error %.3g, gpu %.3f ms\n", count,
+                         maxRel, gpuMs);
+        }
+    } else {
+        report("ml_encoder check file", "missing, truncated or not CNRC v2 for 13 -> 3");
+    }
+
+    // Render equality with the scalar variant.
+    std::optional<Scene> loaded = loadScene(root + "/scenes/cumulus.json", &error);
+    CHECK(loaded.has_value());
+    if (!loaded) return report("load scenes/cumulus.json", error);
+    Scene scene = *loaded;
+    scene.width = 96;
+    scene.height = 54;
+    auto volume = DensityVolume::bake(context, scene, &error);
+    CHECK(volume != nullptr);
+    if (!volume) return report("ml_encoder render bake", error);
+    RenderConfig config;  // march defaults
+    config.renderer = "neural";
+    config.model = modelPath;
+
+    std::vector<float> images[2];
+    const char* variants[2] = {"scalar", "ml_encoder"};
+    for (int v = 0; v < 2; ++v) {
+        RenderConfig c = config;
+        c.inference = variants[v];
+        auto renderer = makeRenderer(context, scene, c, *volume, &error);
+        CHECK(renderer != nullptr);
+        if (!renderer) return report(variants[v], error);
+        CHECK(renderer->encodesOwnPasses() == (v == 1));
+        const uint64_t errorsBefore = context.gpuErrorCount();
+        const bool ok = renderOnce(context, *renderer, scene, &images[v], &error);
+        CHECK(ok);
+        if (!ok) return report(variants[v], error);
+        CHECK(context.gpuErrorCount() == errorsBefore);
+    }
+    CHECK(images[0].size() == images[1].size() && !images[0].empty());
+    if (images[0].size() != images[1].size()) return;
+    double maxRel = 0.0;
+    bool finite = true;
+    bool hasCloud = false;
+    for (size_t i = 0; i < images[0].size(); ++i) {
+        finite = finite && std::isfinite(images[1][i]);
+        maxRel = std::max(maxRel, std::fabs(double(images[1][i]) - images[0][i]) / (std::fabs(double(images[0][i])) + 1e-3));
+        if (i % 4 == 3) hasCloud = hasCloud || images[0][i] > 0.5f;
+    }
+    CHECK(finite);
+    CHECK(hasCloud);
+    CHECK(maxRel <= 1e-4);
+    std::fprintf(stderr, "render scalar vs ml_encoder (96x54): max rel difference %.3g\n", maxRel);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -547,6 +649,7 @@ int main(int argc, char** argv) {
         testMlpParity(*context, dir);
         testDescriptor(*context);
         testNeuralRender(*context, dir);
+        testMLEncoder(*context);
         context->waitIdle();
         CHECK(context->gpuErrorCount() == 0);
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:dir.c_str()] error:nil];

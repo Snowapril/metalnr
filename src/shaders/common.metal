@@ -271,23 +271,51 @@ inline MarchSettings make_march_settings(constant SceneGPU& s, MarchParams p, ui
     return m;
 }
 
+// Resumable state of one view-ray march (march_advance): loop counter i, segment index k, transmittance T,
+// accumulated in-scattered radiance L, done != 0 once the march terminated.
+struct MarchState {
+    uint i;
+    uint k;
+    float T;
+    float3 L;
+    uint done;
+};
+
+inline MarchState march_state_init() {
+    MarchState st;
+    st.i = 0u;
+    st.k = 0u;
+    st.T = 1.0f;
+    st.L = float3(0.0f);
+    st.done = 0u;
+    return st;
+}
+
 // Front-to-back march along r through the AABB. Segment k spans [b_k, b_{k+1}] with b_0 = t0 and
 // b_k = t0 + (jitter + k - 1) * step (k >= 1), the last one clipped at t1; each segment is sampled at its
-// midpoint with its own length dt (exact for a homogeneous medium, dithered otherwise). shade(x, d) returns
-// the in-scattered radiance at x toward -d before albedo; each shaded segment adds the energy-conserving
-// T * albedo * Ls * (1 - exp(-sigma dt)) (Hillaire 2015). Returns float4(L + T * L_env, 1 - T).
+// midpoint with its own length dt (exact for a homogeneous medium, dithered otherwise). Each shaded segment
+// (sigma > 0) calls sink(x, d, w) with the energy-conserving weight w = T * albedo * (1 - exp(-sigma dt))
+// (Hillaire 2015) taken BEFORE T is updated, and adds the returned float3 to L; then T *= exp(-sigma dt).
+// At most max_steps segments; stops when T < min_transmittance (no stop when 0).
+//
+// Resumable: runs the loop from st and returns after max_shaded shaded segments or on termination
+// (st.done = 1). Calling it again with the same r and m continues exactly where it stopped, so splitting a
+// march into chunks gives the same samples, weights and L as one call.
 //
 // EMPTY_SKIP: a lod-kEmptySkipLod sample <= 0 at the segment start proves the 2^3 coarse texels around it are
 // empty, i.e. the field is 0 within 0.5 * 8 voxels; trilinear fine samples are then 0 up to 3.5 voxels away.
 // The skip jumps over the whole segments whose midpoints lie within that radius, so the sample positions stay
 // on the same lattice and the result equals the unskipped march (a skip counts as one step).
-template <typename Shade>
-inline float4 march_view_ray(texture3d<float> tex, constant SceneGPU& s, Ray r, MarchSettings m,
-                             thread Shade& shade) {
-    float3 env = env_radiance(s, r.d);
+template <typename Sink>
+inline void march_advance(texture3d<float> tex, constant SceneGPU& s, Ray r, MarchSettings m, thread Sink& sink,
+                          thread MarchState& st, uint max_shaded) {
+    if (st.done != 0u) {
+        return;
+    }
     float t0, t1;
     if (m.step <= 0.0f || !intersect_aabb(r, s.bounds_min, s.bounds_max, t0, t1)) {
-        return float4(env, 0.0f);
+        st.done = 1u;  // T = 1, L = 0: march_finish returns float4(env, 0)
+        return;
     }
     // Segments k .. k+n-1 have midpoints within (n - 0.5) * step of b_k; pick the largest n keeping them within
     // 3.5 voxels (n = 4 at step_scale 1, i.e. the 0.5 * 8 voxel jump). n = 0 (step > 7 voxels) disables the skip.
@@ -295,31 +323,64 @@ inline float4 march_view_ray(texture3d<float> tex, constant SceneGPU& s, Ray r, 
     if ((m.flags & CNR_MARCH_EMPTY_SKIP) != 0u && s.mip_levels > uint(kEmptySkipLod)) {
         skip_segments = uint(floor((0.5f * 8.0f - 0.5f) * s.voxel_min_extent / m.step + 0.5f + 1e-3f));
     }
-    float T = 1.0f;
-    float3 L = float3(0.0f);
-    uint k = 0u;
-    for (uint i = 0u; i < m.max_steps; ++i) {
-        float a = k == 0u ? t0 : t0 + (m.jitter + float(k - 1u)) * m.step;
+    uint shaded = 0u;
+    while (st.i < m.max_steps) {
+        float a = st.k == 0u ? t0 : t0 + (m.jitter + float(st.k - 1u)) * m.step;
         if (a >= t1) {
-            break;
+            st.done = 1u;
+            return;
         }
+        ++st.i;
         if (skip_segments > 0u && density_at(tex, s, r.o + a * r.d, kEmptySkipLod) <= 0.0f) {
-            k += skip_segments;
+            st.k += skip_segments;
             continue;
         }
-        float b = min(t0 + (m.jitter + float(k)) * m.step, t1);
+        float b = min(t0 + (m.jitter + float(st.k)) * m.step, t1);
         float dt = b - a;
         float3 x = r.o + (a + 0.5f * dt) * r.d;
+        ++st.k;
         float sig = sigma_t_at(tex, s, x);
         if (sig > 0.0f) {
-            float3 Ls = shade(x, r.d);
-            L += T * s.albedo * Ls * one_minus_exp_neg(sig * dt);
-            T *= precise::exp(-sig * dt);
-            if (T < m.min_transmittance) {
-                break;
+            st.L += sink(x, r.d, st.T * s.albedo * one_minus_exp_neg(sig * dt));
+            st.T *= precise::exp(-sig * dt);
+            if (st.T < m.min_transmittance) {
+                st.done = 1u;
+                return;
+            }
+            if (++shaded == max_shaded) {
+                if (st.i >= m.max_steps) {
+                    st.done = 1u;
+                }
+                return;
             }
         }
-        ++k;
     }
-    return float4(L + T * env, 1.0f - T);
+    st.done = 1u;
+}
+
+// Final pixel value of a finished march: float4(L + T * L_env, 1 - T) (no AABB hit: float4(L_env, 0)).
+inline float4 march_finish(constant SceneGPU& s, Ray r, MarchState st) {
+    return float4(st.L + st.T * env_radiance(s, r.d), 1.0f - st.T);
+}
+
+// march_advance sink of march_view_ray: contribution = w * shade(x, d).
+template <typename Shade>
+struct MarchShadeSink {
+    thread Shade* shade;
+
+    float3 operator()(float3 x, float3 d, float w) {
+        return w * (*shade)(x, d);
+    }
+};
+
+// The whole march in one call. shade(x, d) returns the in-scattered radiance at x toward -d before albedo.
+// Returns float4(L + T * L_env, 1 - T).
+template <typename Shade>
+inline float4 march_view_ray(texture3d<float> tex, constant SceneGPU& s, Ray r, MarchSettings m,
+                             thread Shade& shade) {
+    MarchShadeSink<Shade> sink;
+    sink.shade = &shade;
+    MarchState st = march_state_init();
+    march_advance(tex, s, r, m, sink, st, 0xFFFFFFFFu);
+    return march_finish(s, r, st);
 }

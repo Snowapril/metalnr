@@ -83,7 +83,12 @@ void packMatrix(const float* w, uint32_t nOut, uint32_t nIn, uint32_t nPad, uint
 }  // namespace
 
 const char* neuralInferenceName(NeuralInference inference) {
-    return inference == NeuralInference::ShaderML ? "shader_ml" : "scalar";
+    switch (inference) {
+    case NeuralInference::Scalar: return "scalar";
+    case NeuralInference::ShaderML: return "shader_ml";
+    case NeuralInference::MLEncoder: return "ml_encoder";
+    }
+    return "scalar";
 }
 
 uint64_t neuralWeightCount(const NeuralDims& dims) {

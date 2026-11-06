@@ -140,9 +140,7 @@ bool runBenchmark(MetalContext& context, const Scene& scene, const DensityVolume
     auto encodeFrame = [&](MetalContext::FrameFeedback feedback) {
         id<MTL4CommandBuffer> commandBuffer = context.beginFrame();
         const auto start = Clock::now();
-        id<MTL4ComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
-        renderer->encode(encoder, FrameInputs{sceneGPU, context.currentSlot()});
-        [encoder endEncoding];
+        renderer->encodeFrame(commandBuffer, FrameInputs{sceneGPU, context.currentSlot()});
         context.endFrame(commandBuffer, std::move(feedback));
         return msSince(start);
     };

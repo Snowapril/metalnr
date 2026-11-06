@@ -47,6 +47,9 @@ struct MetalContext::Impl {
     id<MTL4CommandAllocator> allocators[kFramesInFlight] = {};
     id<MTL4CommandBuffer> commandBuffers[kFramesInFlight] = {};
     id<MTLResidencySet> residency = nil;
+    // Shared ML intermediates heap and every heap it replaced (see machineLearningHeap in the header).
+    id<MTLHeap> mlHeap = nil;
+    NSMutableArray<id<MTLHeap>>* retiredMlHeaps = [NSMutableArray array];
     // Frame N signals N + 1 once its command buffer completed.
     id<MTLSharedEvent> frameEvent = nil;
 
@@ -214,6 +217,28 @@ void MetalContext::addCompileMs(double ms) { impl_->compileMs += ms; }
 void MetalContext::addResident(id<MTLAllocation> allocation) { [impl_->residency addAllocation:allocation]; }
 void MetalContext::removeResident(id<MTLAllocation> allocation) { [impl_->residency removeAllocation:allocation]; }
 void MetalContext::commitResidency() { [impl_->residency commit]; }
+
+id<MTLHeap> MetalContext::machineLearningHeap(NSUInteger minSize, std::string* error) {
+    if (impl_->mlHeap && impl_->mlHeap.size >= minSize) return impl_->mlHeap;
+    MTLHeapDescriptor* desc = [MTLHeapDescriptor new];
+    desc.type = MTLHeapTypePlacement;
+    desc.size = std::max<NSUInteger>(minSize, 16);
+    id<MTLHeap> heap = [impl_->device newHeapWithDescriptor:desc];
+    if (!heap) {
+        if (error) *error = "machine learning intermediates heap of " + std::to_string(desc.size) + " bytes failed";
+        return nil;
+    }
+    heap.label = @"ml_encoder intermediates";
+    if (impl_->mlHeap) {
+        waitIdle();
+        [impl_->residency removeAllocation:impl_->mlHeap];
+        [impl_->retiredMlHeaps addObject:impl_->mlHeap];
+    }
+    impl_->mlHeap = heap;
+    [impl_->residency addAllocation:heap];
+    [impl_->residency commit];
+    return heap;
+}
 
 id<MTL4ArgumentTable> MetalContext::makeArgumentTable(uint32_t maxBuffers, uint32_t maxTextures,
                                                       std::string* error) {

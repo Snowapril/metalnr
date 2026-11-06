@@ -59,6 +59,15 @@ struct NeuralEvalParams {
 };
 CNR_STATIC_ASSERT(sizeof(NeuralEvalParams) == 160, "NeuralEvalParams layout");
 
+// ml_encoder inference (kernels wave_* in src/shaders/neural_wave.metal): the march runs in chunks of
+// CNR_WAVE_SAMPLES shaded samples per pixel. wave_gather writes the RAW descriptor of each sample into row
+// (pixel * CNR_WAVE_SAMPLES + j) of the ML input (rows of CNR_WAVE_ROW floats: 13 inputs + 3 pad; the ML
+// tensors need a 64-byte row stride) and its march weight into weights[pixel * CNR_WAVE_SAMPLES + j]; the
+// ML encoder writes f into the same rows of its output; wave_accumulate adds them to the per-pixel state.
+#define CNR_WAVE_SAMPLES 16u
+#define CNR_WAVE_ROW 16u
+#define CNR_WAVE_STATE_BYTES 48u   // sizeof(MarchState) in MSL (float3 member: 16-byte aligned)
+
 // Kernel `neural_dump` (training-target generation). One dispatch covers records
 // [record_offset, record_offset + record_count) of one shape; each record uses `chunks` threads
 // that trace paths_per_thread of its `paths` paths each.

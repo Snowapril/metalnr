@@ -26,8 +26,24 @@ public:
 
     // Records this frame's dispatches into `encoder` (created by the caller from the
     // frame command buffer). Must not end the encoder, commit, or wait on the CPU.
-    // Per-frame constants go into storage indexed by in.slot.
+    // Per-frame constants go into storage indexed by in.slot. Not called for renderers
+    // that encode their own passes (encodesOwnPasses()).
     virtual void encode(id<MTL4ComputeCommandEncoder> encoder, const FrameInputs& in) = 0;
+
+    // True if a frame needs encoders other than one compute encoder (e.g. a machine-learning
+    // encoder pass); callers then record frames only through encodeFrame().
+    virtual bool encodesOwnPasses() const { return false; }
+
+    // Records this frame into `commandBuffer`. The default wraps encode() in one compute
+    // encoder. Renderers that encode their own passes create their encoders here; their first
+    // pass waits (queue barrier) for earlier queue work that may still use their resources or
+    // read output(), including a previous frame's fragment stage (viewer display pass).
+    // Must not commit or wait on the CPU.
+    virtual void encodeFrame(id<MTL4CommandBuffer> commandBuffer, const FrameInputs& in) {
+        id<MTL4ComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        encode(encoder, in);
+        [encoder endEncoding];
+    }
 
     // Progressive renderers restart accumulation; others ignore it.
     virtual void resetAccumulation() {}

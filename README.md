@@ -68,23 +68,39 @@ On the Apple M1 the network costs 2–2.5× the analytic march per frame (the ar
 the same hand-written approach). On this Apple7 GPU the Shader ML path is 5–20% slower than the hand-written loops,
 with identical image quality.
 
-### Metal 4 ML: what worked on this machine
+### Metal 4 ML: three ways to run the same network
 
-- **Shader ML** (`<metal_tensor>` + `mpp::tensor_ops::matmul2d<…, execution_thread>` inside the march kernel) works
-  through runtime compilation with `MTL4Compiler` on the M1. Constraints found: K must be a multiple of 16 (13 inputs
-  padded to 16), single-thread N must be 1, 2, 4 or a multiple of 8 (3 outputs padded to 4), and the destination
-  accumulates. GPU inference matches PyTorch within 5e-6 (scalar) and 4e-3 / 6e-3 (Shader ML, fp16 weights).
-- **`MTL4MachineLearningCommandEncoder`** needs a network as an `.mtlpackage`, produced only by Apple's
-  `metal-package-builder` from the Xcode Metal toolchain. On this machine the Xcode license is not accepted, so that
-  path is not built: `inference: "ml_encoder"` reports unavailable. Details in
+| Inference (`configs/neural_single*.json`) | How | Max rel. error vs PyTorch (10k rows) | GPU ms / frame, 240×135 |
+|---|---|---|---|
+| `scalar` | Hand-written MSL loops inside the march (the article's approach) | 5.2e-6 | 2.43 |
+| `shader_ml` | Metal 4 Shader ML: `<metal_tensor>` + MetalPerformancePrimitives `matmul2d<…, execution_thread>` inside the march; fp16 weights, fp32 activations | 5.7e-3 | 2.27 |
+| `ml_encoder` | `MTL4MachineLearningCommandEncoder` running an `.mtlpackage` network, fed by a wavefront split of the march | 2.8e-6 | 439.94 |
+
+Timings follow the protocol (30 warm-up + 300 frames × 3 runs, median; records in
+[`results/mlencoder/`](results/mlencoder)). The `ml_encoder` image equals the scalar image (relMSE 2.3e-15).
+
+- **Shader ML** works through runtime compilation with `MTL4Compiler` on the M1. Constraints found: K must be a
+  multiple of 16 (13 inputs padded to 16), single-thread N must be 1, 2, 4 or a multiple of 8 (3 outputs padded to 4),
+  and the destination accumulates. With fp16 activations the error was 1.1e-2; fp32 activations bring it to 4–6e-3.
+- **The ML encoder** runs whole networks over a batch, so a network evaluated at every march step needs a wavefront:
+  per 16-sample chunk, a compute pass resumes each pixel's march and writes descriptors, one ML dispatch evaluates all
+  rows, and a compute pass accumulates. Exactness requires `max_steps / 16 = 32` chunks per frame over every pixel,
+  finished or not, which is why it is ~180× slower here (about 27 ns per row, 14 ms per 518k-row dispatch). It suits
+  large per-frame networks (upscalers, denoisers) far better than a 512-MAC per-sample shader network.
+- Getting a network into the encoder (`tools/export_mtlpackage.py`): PyTorch → Core ML → Apple's `metal-package-builder`.
+  Pitfalls found: the downloaded Metal toolchain cannot find `coremlcompiler` (the script recreates the expected
+  layout), the builder only lowers the macOS 15 Core ML opset, ML tensor rows need 64-byte strides, and releasing a
+  dispatched intermediates heap crashes the GPU validation layer (the heap is context-owned). Details in
   [docs/architecture.md](docs/architecture.md) §9.
 
 ## Requirements
 
 - Apple Silicon Mac with a Metal 4 GPU family, macOS 26 or later.
 - Xcode Command Line Tools (Apple clang, the macOS SDK with the `MTL4*` headers and MetalPerformancePrimitives) and
-  CMake ≥ 3.28. Xcode itself is not needed: shaders are compiled at runtime from source.
-- Python 3.9+ with PyTorch, **only** to retrain the networks (`tools/requirements.txt`).
+  CMake ≥ 3.28. Shaders are compiled at runtime from source.
+- Python 3.9+ with PyTorch and coremltools, **only** to retrain the networks and export `.mtlpackage` files
+  (`tools/requirements.txt`). The export also needs Xcode with its license accepted and the Metal toolchain
+  (`xcodebuild -downloadComponent MetalToolchain`). Rendering with the committed `.mtlpackage` files needs neither.
 
 ## Build and test
 
@@ -105,7 +121,7 @@ ctest --test-dir build --output-on-failure   # runs under the Metal debug layer 
 
 # Offline render to linear PFM and tone-mapped PNG (pt renders config.spp samples)
 ./build/cloudnr render --scene scenes/cumulus.json --camera front --config configs/neural_single_shaderml.json \
-    --out out/neural.pfm --png out/neural.png
+    --out out/neural.pfm --png out/neural.png      # or neural_single.json (scalar), neural_single_mlencoder.json
 
 # Two-half path-traced reference with a convergence log, and image comparison (relMSE, PSNR, SSIM)
 ./build/cloudnr reference --scene scenes/cumulus.json --camera front --spp 4096 --out out/ref
@@ -136,7 +152,11 @@ python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 ./build/cloudnr dump-training --out data/val.cnrd   --shape-begin 2000 --shape-end 3000 --shapes 32  --records-per-shape 4096
 .venv/bin/python tools/train.py --train data/train.cnrd --val data/val.cnrd --out models/cumulus_net
 
-# GPU inference (scalar and Shader ML) vs PyTorch on 10,000 validation inputs
+# Export each network for the ML encoder: .cnrm -> Core ML -> .mtlpackage (needs the Xcode Metal toolchain)
+.venv/bin/python tools/export_mtlpackage.py --model models/cumulus_single.cnrm
+.venv/bin/python tools/export_mtlpackage.py --model models/cumulus_net.cnrm
+
+# GPU inference (scalar, Shader ML and ML encoder) vs PyTorch on 10,000 validation inputs
 ./build/cloudnr neural-check --model models/cumulus_net.cnrm --check models/cumulus_net.check.bin
 ```
 
@@ -152,9 +172,9 @@ targets, both lessons from the article. Python is never needed at render time.
 | `src/shaders/` | MSL: shared physics and march (`common.metal`), cumulus bake, the three renderers, neural descriptor/MLP (scalar and Shader ML), display pass |
 | `tests/` | One test executable per file (CTest): scene/IO/metrics, GPU foundation, analytic closed forms, path-tracer statistics, neural loader/inference, benchmark framework |
 | `scenes/`, `configs/`, `experiments/` | Scenes, renderer configs, the fixed sweep and suite experiments |
-| `models/` | Trained networks (`.cnrm`), sidecar metadata and GPU parity check files |
-| `tools/` | `train.py` and pinned Python requirements |
-| `results/sweep/`, `results/eval/` | The sun sweep and the held-out suite: reports, CSV, JSON records, images |
+| `models/` | Trained networks (`.cnrm`), sidecar metadata, GPU parity check files, and the Core ML / `.mtlpackage` exports for the ML encoder |
+| `tools/` | `train.py`, `export_mtlpackage.py` and pinned Python requirements |
+| `results/sweep/`, `results/eval/`, `results/mlencoder/` | The sun sweep, the held-out suite and the inference-path benchmarks: reports, CSV, JSON records, images |
 | `docs/` | Architecture and experiment protocol |
 
 Training data (`data/`), the path-traced reference images and float `.pfm` outputs are not committed; the commands
